@@ -1,5 +1,1 @@
-# 桌面 / x86_64：本文件包含 PyPI 版 torch。
-# Jetson (aarch64)：请勿依赖此处安装 torch；请创建 conda 环境后运行 scripts/bootstrap_conda_env.sh（使用 NVIDIA 官方 wheel）。
-
 -r requirements-base.txt
-torch>=2.1.0

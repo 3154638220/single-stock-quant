@@ -1,295 +1,48 @@
 paths:
   duckdb_path: data/market.duckdb
-  results_dir: data/results
+  output_dir: data/output
   logs_dir: data/logs
-  models_dir: data/models
-  # P4-C：统一实验记录落盘目录（run_backtest_eval.py / 训练 / eval 共用）
-  experiments_dir: data/experiments
-  universe_cache_path: data/cache/universe_symbols.json
-  asof_trade_date: ""
+  # asof_trade_date: ""
 
 logging:
-  # 日志格式：json（结构化，便于 ELK / DuckDB 查询）或 text（人读）
-  format: json
+  format: text
+
+akshare:
+  adjust: qfq
+  sleep_between_symbols_sec: 0.5
+  max_fetch_retries: 3
+  retry_delay_sec: 2.0
+  request_timeout_sec: 10.0
+  fetch_workers: 2
+  daily_source_preference: sina
+  daily_allow_fallback: true
 
 database:
   table_daily: a_share_daily
   table_audit: data_fetch_audit
-  table_fundamental: a_share_fundamental
-  table_fund_flow: a_share_fund_flow
-  table_shareholder: a_share_shareholder
-  # P2-7: 价格复权类型 —— qfq=前复权 | hfq=后复权 | none=不复权
-  # 确认数据库存储的价格已按此方式复权，避免除权日产生虚假信号
-  price_adjust: qfq
-
-fundamental:
-  # 基本面刷新入口写入后，月度链路按 PIT 口径读取估值/质量因子。
-  auto_update: true
-  # 0 表示不限制；可设置为正数用于调试加速
-  auto_update_max_symbols: 0
-
-risk:
-  # Regime 基准：沪深300 代码；若 ETF 不在库中可改用 market_ew_proxy（全市场等权日收益）
-  benchmark_symbol: "510300"
-
-gpu:
-  device: cuda
-  dtype: float32
-
-features:
-  lookback_trading_days: 160
-  min_valid_days: 30
-  momentum_window: 10
-  rsi_period: 14
-  atr_period: 14
-  vol_window: 20
-  turnover_window: 20
-  vp_corr_window: 20
-  reversal_window: 5
-  bias_window_short: 20
-  bias_window_long: 60
-  max_drop_window: 20
-  recent_return_window: 3
-  price_position_window: 250
-  tail_window: 10
-  vpt_window: 20
-  range_skew_window: 20
-  # 截面市值中性化（去除 A 股市值效应）：true=对打分因子做市值回归残差，false=关闭
-  neutralize: true
-
-signals:
-  top_k: 20
-  # P4-B 关键差异字段：生产与回测默认排序键应一致；修改该值会直接改变选股逻辑。
-  sort_by: composite_extended
-  composite:
-    w_momentum: 0.65
-    w_rsi: 0.35
-    rsi_mode: level
-  composite_extended:
-    # P1-A：中长期动量（12-1 月）
-    momentum_12_1: 0.10
-    momentum: -0.15
-    rsi: -0.15
-    realized_vol: 0.03
-    turnover_roll_mean: 0.05
-    # P1-A：资金流（5日换手相对 252 日历史分位，低分位偏反转）
-    turnover_rel_pct_252: -0.04
-    vol_ret_corr: 0.05
-    vol_to_turnover: 0.02
-    bias_short: -0.12
-    bias_long: -0.06
-    max_single_day_drop: 0.06
-    recent_return: -0.15
-    price_position: -0.04
-    intraday_range: -0.04
-    upper_shadow_ratio: -0.05
-    lower_shadow_ratio: 0.04
-    close_open_return: 0.04
-    tail_strength: 0.05
-    # P1-A 基本面因子（初始小权重）
-    pe_ttm: -0.04
-    pb: -0.04
-    # ev_ebitda: -0.03  # P0-2: 已移除 — A 股数据覆盖率为 0，对所有股票产生相同常数偏置
-    roe_ttm: 0.04
-    net_profit_yoy: 0.03
-    gross_margin_change: 0.03
-    debt_to_assets_change: -0.03
-    ocf_to_net_profit: 0.03
-    # P1-B 资金流（可选）
-    northbound_net_inflow: 0.03
-    margin_buy_ratio: -0.02
-  # P1-B：根据 diagnose_factor_ic 报告自动删减/翻转无效因子
-  p1_factor_filter:
-    enabled: false
-    ic_report_path: data/results/factor_ic_report.csv
-    remove_if_t1_and_t21_negative: true
-    zero_if_abs_t1_below: 0.0
-    flip_if_t1_negative_and_t21_above: 0.005
-  # P1-3：滚动 ICIR 动态权重。enabled=true 时优先使用 ICMonitor 的滚动 ICIR 替代固定权重。
-  ic_weighting:
-    enabled: true
-    window: 20
-    min_periods: 12
-    softmax_temperature: 2.0
-    # update_ic_weights.py 输出路径；存在时优先读取
-    weights_path: data/cache/ic_weights.json
-    # 未提供 weights_path 或文件缺失时，可从监控文件在线计算
-    monitor_path: data/logs/ic_monitor.json
-    half_life: 20.0
-    clip_abs_weight: 0.25
-  tree_model:
-    bundle_dir: data/models/xgboost_panel_latest
-    rsi_mode: level
-    # P3-A：严格时间序列交叉验证折数（TimeSeriesSplit）
-    time_cv_splits: 3
-    keep_versions: 8
-    rank_ic_guard:
-      enabled: true
-      quantile: 0.25
-      min_history: 4
-      # P3-A：硬门槛，验证集 Rank IC 不达标不发布
-      min_rank_ic: 0.03
-    labels:
-      horizons: [5, 10, 20]
-      weights: [0.5, 0.3, 0.2]
-      fusion: rank_fusion
-    features:
-      - momentum
-      - rsi
-      - atr
-      - realized_vol
-      - turnover_roll_mean
-      - vol_ret_corr
-      - short_reversal
-      - vol_to_turnover
-      - volume_skew_log
-      - bias_short
-      - bias_long
-      - max_single_day_drop
-      - recent_return
-      - price_position
-      - log_market_cap
-      - weekly_kdj_k
-      - weekly_kdj_d
-      - weekly_kdj_j
-      - weekly_kdj_oversold
-      - weekly_kdj_oversold_depth
-      - weekly_kdj_rebound
-      - intraday_range
-      - upper_shadow_ratio
-      - lower_shadow_ratio
-      - close_open_return
-      - overnight_gap
-      - tail_strength
-      - volume_price_trend
-      - intraday_range_skew
-  deep_sequence:
-    bundle_dir: data/models/deep_sequence_latest
-    seq_len: 30
-    map_location: cpu
-
-monthly_selection:
-  # 默认方法：M8 + quality + indcap3（owner override promotion，2026-05-11）
-  # 备选：monthly_selection_u1_top20_m8_natural_soft_gamma0_20（M10 cost gate 通过，2026-05-04）
-  default_method:
-    config_id: monthly_selection_m8_indcap3_plus_quality
-    config_path: configs/promoted/monthly_selection_m8_indcap3_plus_quality.json
-    candidate_pool_version: U1_liquid_tradable
-    top_k: 20
-    feature_families:
-      - industry_breadth
-      - fund_flow
-      - fundamental
-      - quality
-    base_model: M8_regime_aware_fixed_policy
-    model: M8_regime_aware_fixed_policy__indcap3
-    selection_policy: industry_names_cap
-    max_industry_names: 3
-    cost_bps: 10.0
-    buy_timing: next_month_first_trading_day_open
-    sell_timing: holding_month_last_trading_day_open
-    transition_policy: sell_existing_top20_on_month_end_then_buy_next_top20_on_next_trade_day
-    production_status: active_promoted
-    promotion_package: docs/reports/2026-05/monthly_selection_m8_plus_quality_2026_05_10_2026_05_10.md
-
-regime:
-  # P4-B 关键差异字段：开启后会对因子权重做状态切换，可能提升适应性也可能增加方差。
-  enabled: true
-  short_window: 20
-  long_window: 60
-  dynamic_weighting_enabled: true
-  dynamic_vol_target_ann: 0.22
-  dynamic_vol_scale: 0.08
-  dynamic_trend_scale: 0.05
-  dynamic_strength: 3.0
-
-portfolio:
-  # P4-B 关键差异字段：equal_weight / risk_parity / min_variance / mean_variance 会显著影响回撤与换手。
-  weight_method: risk_parity
-  score_col: auto
-  max_single_weight: 0.05
-  max_industry_weight: null
-  industry_col: null
-  # P0-3: 协方差估计方法 —— sample（样本）| ledoit_wolf（收缩）| auto（自适应）
-  covariance_method: auto
-  # P0-3: 仅 auto 模式生效，条件数超过阈值自动切换 Ledoit-Wolf
-  condition_number_threshold: 1000
-  # P2-6: 月度换手率上限（0~1，1=不约束），在优化层约束降低摩擦
-  max_monthly_turnover: 0.60
-  # 月末调仓默认不限制半 L1 换手；1.0 表示允许全买全卖。
-  # 如需复现低换手实验，可手动改为 0.3。
-  max_turnover: 1.0
-  # P2-B：行业持仓只数上限（需配合 data/cache/industry_map.csv）
-  industry_cap_count: 3
-  cov_lookback_days: 60
-  cov_ridge: 1.0e-6
-  cov_shrinkage: ledoit_wolf
-  cov_ewma_halflife: 20
-  risk_aversion: 1.0
-  turnover_cost_model:
-    enabled: true
-    size_col: log_market_cap
-    small_cap_coeff: 1.6
-    mid_cap_coeff: 1.0
-    large_cap_coeff: 0.7
-    q_small: 0.33
-    q_large: 0.67
-
-backtest:
-  execution_mode: tplus1_open
-  # close_to_close/vwap：额外执行滞后天数（run_backtest_eval 默认 1；tplus1_open 下忽略）
-  execution_lag: 1
-  # P4-B 关键差异字段：调仓频率（M/2W/W...）直接影响信号衰减与交易成本暴露。
-  eval_rebalance_rule: M
-  limit_up_mode: redistribute
-  # execution_mode=vwap 时生效：按换手额外扣减执行冲击
-  vwap_slippage_bps_per_side: 3.0
-  vwap_impact_bps: 8.0
-
-transaction_costs:
-  commission_buy_bps: 2.5
-  commission_sell_bps: 2.5
-  slippage_bps_per_side: 4.5
-  stamp_duty_sell_bps: 5.0
-  # P2-1: 市场冲击成本模型 —— fixed_bps（固定）| sqrt_adv（平方根律）
-  impact_model: sqrt_adv
-  # P2-1: 平方根律系数 k（参与率 1% 冲击 ≈ k * 0.1 * 10000 bps）
-  impact_k: 0.10
-
-prefilter:
-  # P4-B 关键差异字段：以下过滤阈值会改变候选池组成，需与回测参数保持一致。
-  enabled: true
-  limit_move_lookback: 5
-  limit_move_max: 2
-  turnover_low_pct: 0.10
-  turnover_high_pct: 0.98
-  price_position_high_pct: 0.90
-  price_position_lookback: 250
-
-orthogonalize:
-  enabled: false
-  method: symmetric
-
-label:
-  transform: truncate
+  auto_backfill_derived_on_init: true
 
 quality:
-  null_ratio_warn_threshold: 0.2
-  outlier_sigma_threshold: 8.0
+  max_calendar_gap_days: 20
+  null_ratio_max: 0.05
+  fail_on_ohlc_invalid: true
+  fail_on_large_gaps: true
 
-akshare:
-  adjust: qfq
-  request_timeout_sec: 10
-  retry_delay_sec: 2
-  max_fetch_retries: 3
-  sleep_between_symbols_sec: 0
-  fetch_workers: 4
-  daily_source_preference: sina
-  daily_allow_fallback: true
-  backfill_derived_after_fetch: false
-  cache_dir: data/cache/akshare
-  stale_cache_on_error: true
-  universe_prefer_akshare: false
-  universe_merge_duckdb_and_cache: true
-  universe_target_min_symbols: 4500
-  min_cached_universe_symbols: 1000
+trend_signal:
+  mode: macd_cross
+  macd_fast: 12
+  macd_slow: 26
+  macd_signal: 9
+  ma_fast: 5
+  ma_slow: 20
+  ma_smooth: 3
+  boll_window: 20
+
+backtest:
+  cost_bps: 15.0
+  initial_capital: 100000
+  execution: tplus1_open
+
+notify:
+  wecom_webhook_url: ""
+  mention_all: false

@@ -5,22 +5,15 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "quant-system"
 version = "0.1.0"
-description = "本地化 A 股量化流水线（AkShare + DuckDB + PyTorch 因子）"
+description = "Single-stock A-share DK trend signal system"
 readme = "README.md"
 requires-python = ">=3.10,<3.11"
 dependencies = [
     "akshare>=1.14.0",
     "duckdb>=1.0.0",
-    "pyarrow>=14.0.0",
-    "polars>=1.0.0",
     "pandas>=2.0.0",
     "numpy>=1.26.1,<2.0.0",
     "pyyaml>=6.0",
-    "scikit-learn>=1.3.0",
-    "xgboost>=2.0.0",
-    "lightgbm>=4.0.0",
-    "scipy>=1.11.0",
-    "tqdm>=4.66.0",
     "requests>=2.31.0",
 ]
 
@@ -68,18 +61,10 @@ disallow_untyped_defs = false
 # P0-5: 渐进扩展覆盖范围，每季度新增 1–2 个模块
 [[tool.mypy.overrides]]
 module = [
-    "src.pipeline.monthly_dataset",
-    "src.features.ic_monitor",
     "src.data_fetcher.db_manager",
     "src.backtest.engine",
-    "src.backtest.statistical_tests",
-    "src.portfolio.optimizer",
-    "src.portfolio.covariance",
-    "src.portfolio.weights",
-    "src.market.regime",
-    "src.analysis.regime_sensitivity",
-    "src.analysis.portfolio_method_compare",
-    "src.analysis.capacity_report",
-    "src.backtest.walk_forward",
+    "src.indicators.dktrend",
+    "src.signals.generator",
+    "src.backtest.single_stock",
 ]
 disallow_untyped_defs = true

@@ -1,8 +1,7 @@
-"""环境自检核心逻辑，从 scripts/env_check.py 迁入。"""
+"""Environment checks for the single-stock trend system."""
 
 from __future__ import annotations
 
-import os
 import socket
 import sys
 from pathlib import Path
@@ -57,23 +56,14 @@ def run_checks(*, config: Path | None, quiet: bool) -> int:
     else:
         _ok(f"Python {vi.major}.{vi.minor}.{vi.micro}", quiet=quiet)
 
-    # PyTorch + CUDA
-    try:
-        import torch
-
-        cuda_ok = torch.cuda.is_available()
-        dev = torch.cuda.get_device_name(0) if cuda_ok else "n/a"
-        _ok(
-            f"torch {torch.__version__} | cuda.is_available()={cuda_ok}"
-            + (f" | device0={dev}" if cuda_ok else "（将使用 CPU 回退）"),
-            quiet=quiet,
-        )
-        if os.environ.get("REQUIRE_CUDA", "").lower() in ("1", "true", "yes") and not cuda_ok:
-            _fail("环境变量 REQUIRE_CUDA 已启用但 CUDA 不可用", quiet=quiet)
+    # Core import checks
+    for module in ["pandas", "numpy", "yaml", "requests", "duckdb"]:
+        try:
+            __import__(module)
+            _ok(f"import {module}", quiet=quiet)
+        except Exception as e:
+            _fail(f"import {module} failed: {e}", quiet=quiet)
             failed += 1
-    except Exception as e:
-        _fail(f"PyTorch 检查异常: {e}", quiet=quiet)
-        failed += 1
 
     # DuckDB 可写
     try:
@@ -120,7 +110,7 @@ def run_checks(*, config: Path | None, quiet: bool) -> int:
         _ok("CONDA_DEFAULT_ENV=quant-system", quiet=quiet)
     elif not quiet:
         print(
-            f"[WARN] 当前 conda 环境为 {conda_env!r}，建议使用: conda activate quant-system",
+            f"[WARN] 当前 conda 环境为 {conda_env!r}，建议使用项目依赖环境",
             flush=True,
         )
 

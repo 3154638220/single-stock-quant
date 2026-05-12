@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""运行前环境自检：Python 版本、PyTorch/CUDA、DuckDB 可写、AkShare 连通。
+"""运行前环境自检：Python 版本、核心依赖、DuckDB 可写、AkShare 连通。
 
 用法:
     python scripts/env_check.py
@@ -20,7 +20,7 @@ from src.env_check import run_checks
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description="量化流水线环境自检")
+    p = argparse.ArgumentParser(description="单股多空趋势系统环境自检")
     p.add_argument("--config", type=Path, default=None, help="config.yaml 路径")
     p.add_argument("--quiet", action="store_true", help="仅通过退出码表示结果（0=全部通过）")
     args = p.parse_args()

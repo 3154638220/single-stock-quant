@@ -23,20 +23,16 @@ def _append_unique(paths: list[Path], path: Path) -> None:
 
 
 def config_path_candidates(config_path: Union[str, Path]) -> list[Path]:
-    """Return compatible config lookup paths rooted at the project directory."""
+    """Return config lookup paths rooted at the project directory."""
     root = project_root()
     raw = Path(config_path).expanduser()
     candidates: list[Path] = []
 
     if raw.is_absolute():
         _append_unique(candidates, raw)
-        if raw.parent == root and raw.name.startswith("config.yaml.backtest."):
-            _append_unique(candidates, root / "configs" / "backtests" / raw.name)
         return candidates
 
     _append_unique(candidates, root / raw)
-    if len(raw.parts) == 1 and raw.name.startswith("config.yaml.backtest."):
-        _append_unique(candidates, root / "configs" / "backtests" / raw.name)
     return candidates
 
 
@@ -109,13 +105,21 @@ def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any
     return result
 
 
-# 默认配置骨架（不含 composite_extended 等需用户显式配置的节）
+# 默认配置骨架。
 DEFAULT_CONFIG: Dict[str, Any] = {
-    "signals": {
-        "top_k": 20,
+    "trend_signal": {
+        "mode": "macd_cross",
+        "macd_fast": 12,
+        "macd_slow": 26,
+        "macd_signal": 9,
+        "ma_fast": 5,
+        "ma_slow": 20,
+        "ma_smooth": 3,
+        "boll_window": 20,
     },
-    "portfolio": {
-        "industry_cap_count": 3,
-        "weight_method": "risk_parity",
+    "backtest": {
+        "cost_bps": 15.0,
+        "initial_capital": 100000,
+        "execution": "tplus1_open",
     },
 }

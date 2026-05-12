@@ -9,7 +9,7 @@ from .engine import (
 )
 from .performance_panel import (
     PerformancePanel,
-    aggregate_walk_forward_panels,
+    aggregate_panels,
     compute_performance_panel,
     panel_from_mapping,
 )
@@ -23,12 +23,13 @@ from .transaction_costs import (
     net_simple_return_from_long_hold,
     transaction_cost_params_from_mapping,
 )
+from .single_stock import SingleStockBacktestResult, run_single_stock_backtest
 
 __all__ = [
     "BacktestConfig",
     "BacktestResult",
     "PerformancePanel",
-    "aggregate_walk_forward_panels",
+    "aggregate_panels",
     "build_daily_weights",
     "build_limit_up_open_mask",
     "build_open_to_open_returns",
@@ -42,4 +43,6 @@ __all__ = [
     "run_backtest",
     "transaction_cost_params_from_mapping",
     "TransactionCostParams",
+    "SingleStockBacktestResult",
+    "run_single_stock_backtest",
 ]

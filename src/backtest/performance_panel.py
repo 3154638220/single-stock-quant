@@ -1,4 +1,4 @@
-"""统一绩效面板：年化、夏普、Calmar、最大回撤、胜率、换手率。"""
+"""Performance metrics: annual return, Sharpe, Calmar, drawdown and win rate."""
 
 from __future__ import annotations
 
@@ -12,10 +12,7 @@ from src.backtest.risk_metrics import max_drawdown_from_returns
 
 @dataclass(frozen=True)
 class PerformancePanel:
-    """回测/切片统一输出指标（与具体引擎解耦，便于 walk-forward 汇总）。
-
-    P2-2: 新增 dsr / dsr_pvalue 字段，用于 Deflated Sharpe Ratio 多重比较检验。
-    """
+    """Unified metric panel for backtests."""
 
     annualized_return: float
     sharpe_ratio: float
@@ -26,7 +23,6 @@ class PerformancePanel:
     n_periods: int
     total_return: float
     periods_per_year: float
-    # P2-2: Deflated Sharpe Ratio 多重比较检验
     dsr: float = float("nan")
     dsr_pvalue: float = float("nan")
 
@@ -95,71 +91,6 @@ def calmar_ratio(
     return float(annualized_return / max_drawdown)
 
 
-def deflated_sharpe_ratio(
-    sharpe: float,
-    n_trials: int,
-    *,
-    skewness: float = 0.0,
-    kurtosis: float = 3.0,
-    n_obs: int = 252,
-) -> tuple[float, float]:
-    """P2-2: Deflated Sharpe Ratio (Bailey & López de Prado, 2014)。
-
-    修正多重比较和非正态性对 Sharpe Ratio 的通货膨胀效应。
-    同时测试多个策略配置时，随机抽到高 Sharpe 的概率不可忽视。
-
-    Parameters
-    ----------
-    sharpe : 观测到的年化 Sharpe Ratio
-    n_trials : 并行测试的策略/配置数量（多重比较次数）
-    skewness : 收益分布的偏度（默认 0，正态）
-    kurtosis : 收益分布的峰度（默认 3，正态）
-    n_obs : 观测样本数（默认 252 个交易日）
-
-    Returns
-    -------
-    (dsr, p_value) : DSR 值和对应的 p-value
-        DSR < 0.05 表示统计显著；p_value > 0.05 表示不显著。
-    """
-    import numpy as np
-    from scipy.stats import norm
-
-    sr = float(sharpe)
-    T = max(int(n_trials), 1)
-    N = max(int(n_obs), 1)
-
-    if not np.isfinite(sr) or sr <= 0:
-        return 0.0, 1.0
-
-    # E[max(Sharpe)] under null (zero mean), corrected for non-normality
-    # Bailey & López de Prado (2014), Eq. (6)
-    sk = float(skewness)
-    ku = float(kurtosis)
-
-    # Expected maximum Sharpe from T independent trials under null
-    z_score = (1.0 - np.exp(-1.0)) * norm.ppf(1.0 - 1.0 / T)
-    if not np.isfinite(z_score):
-        z_score = norm.ppf(1.0 - 1.0 / T)
-
-    # Non-normality correction: variance of Sharpe estimator
-    var_sharpe = 1.0 + 0.5 * sr**2 - sk * sr + (ku - 3.0) / 4.0 * sr**2
-    se_sharpe = np.sqrt(max(var_sharpe, 1e-8) / N)
-
-    # DSR: P(max SR >= observed SR) under null
-    # = 1 - ((P(SR < observed))^T)
-    prob_single = norm.cdf(sr, loc=0.0, scale=se_sharpe)
-    if prob_single >= 1.0:
-        dsr = 0.0
-    else:
-        dsr = 1.0 - prob_single ** T
-    dsr = float(np.clip(dsr, 0.0, 1.0))
-
-    # p-value approximation
-    p_value = 1.0 - float(dsr) if dsr < 1.0 else 0.0
-
-    return dsr, p_value
-
-
 def win_rate(returns: np.ndarray) -> float:
     """正收益 bar 占比。"""
     r = _finite_returns(returns)
@@ -174,7 +105,6 @@ def compute_performance_panel(
     turnover: Optional[np.ndarray] = None,
     risk_free_daily: float = 0.0,
     periods_per_year: float = 252.0,
-    # P2-2: 多重比较检验参数
     n_concurrent_strategies: int = 1,
 ) -> PerformancePanel:
     """
@@ -188,8 +118,7 @@ def compute_performance_panel(
         可选，与 ``returns`` 对齐或可聚合的换手序列；若提供则取 ``nanmean`` 为 turnover_mean，
         否则 turnover_mean 为 nan。
     n_concurrent_strategies
-        P2-2: 并行测试的策略/配置数量（多重比较次数）。
-        当 > 1 时，计算 Deflated Sharpe Ratio 并对 Sharpe 进行多重比较修正。
+        Kept for API compatibility. No extra statistical test is computed.
     """
     r = np.asarray(returns, dtype=np.float64).ravel()
     r_fin = _finite_returns(r)
@@ -208,30 +137,8 @@ def compute_performance_panel(
     else:
         t_mean = float("nan")
 
-    # P2-2: Deflated Sharpe Ratio 多重比较检验
     dsr = float("nan")
     dsr_pvalue = float("nan")
-    n_trials = max(int(n_concurrent_strategies), 1)
-    if n_trials > 1 and np.isfinite(sh) and n >= 2:
-        # 计算收益分布的偏度和峰度
-        r_valid = r_fin[np.isfinite(r_fin)]
-        if r_valid.size >= 3:
-            from scipy.stats import kurtosis as scipy_kurtosis
-            from scipy.stats import skew
-            try:
-                sk = float(skew(r_valid))
-                ku = float(scipy_kurtosis(r_valid, fisher=False))  # Pearson 峰度
-            except Exception:
-                sk, ku = 0.0, 3.0
-        else:
-            sk, ku = 0.0, 3.0
-        dsr, dsr_pvalue = deflated_sharpe_ratio(
-            sh,
-            n_trials,
-            skewness=sk,
-            kurtosis=ku,
-            n_obs=max(n, 1),
-        )
 
     return PerformancePanel(
         annualized_return=ann,
@@ -248,16 +155,12 @@ def compute_performance_panel(
     )
 
 
-def aggregate_walk_forward_panels(
+def aggregate_panels(
     panels: list[PerformancePanel],
     *,
     method: str = "mean",
 ) -> dict[str, Any]:
-    """
-    多折 walk-forward 面板的简单聚合（均值或中位数），便于总览稳定性。
-
-    method: mean | median
-    """
+    """Aggregate multiple performance panels by mean or median."""
     if not panels:
         return {"n_folds": 0}
     keys = (

@@ -1,216 +1,69 @@
-# quant-system
+# single-stock-quant
 
-本仓库是一套本地化 A 股月频选股研究流水线：用 AkShare 增量写入 DuckDB，构建日线量价、行业宽度、资金流、基本面与股东户数因子，按统一的 T+1/open-to-open 口径生成月度 Top-K 选股名单、研究报告与回测证据。默认不推送云端，运行产物落在 `data/` 下。
+This repository is a local A-share single-stock trend timing system. It stores daily OHLCV data in DuckDB, computes an Eastmoney-style long/short trend approximation, prints buy/sell state changes, and runs T+1 open single-stock backtests.
 
-项目只维护月度选股链路：
-
-| 链路 | 入口 | 状态 | 输出 |
-| --- | --- | --- | --- |
-| 月度选股链路 | `scripts/run_monthly_selection_*.py` | 生产默认方法已定为 `U1_liquid_tradable + Top20 + M8+quality indcap3` | `monthly_selection_*` 数据集、leaderboard、Top20 月度名单 |
-
-生产准入边界在 `configs/promoted/promoted_registry.json`。截至仓库当前记录 `2026-05-11`，active promoted 配置为 `monthly_selection_m8_indcap3_plus_quality`；未登记的研究结果在 promotion gate 通过前，不应写回 `config.yaml.example` 或本地生产 `config.yaml` 的默认主线。
-
-算法与统计细节见 [docs/项目算法建模详解.md](docs/项目算法建模详解.md)，月度流程见 [docs/月度选股流程说明.md](docs/月度选股流程说明.md)，当前研究计划见 [docs/plan.md](docs/plan.md)。
-
-## 已实现能力
-
-| 模块 | 说明 |
-| --- | --- |
-| 数据 | AkShare 日线增量、股票池缓存、DuckDB 存储、写入前质量检查、网络重试与本地缓存回退，位于 `src/data_fetcher/` |
-| 可交易性 | ST/停牌近似、涨跌停板比例、次日开盘一字涨停不可买过滤、月度候选池 U0/U1/U2，位于 `src/market/tradability.py` |
-| 核心管线 | 月度数据集、多源特征、LTR、P1 标签和正式回测核心逻辑，位于 `src/pipeline/` |
-| 日线因子 | GPU/CPU 张量批量计算动量、RSI、ATR、波动率、换手、量价相关、乖离、价格区间位置、周线 KDJ 与 K 线结构代理因子 |
-| 多源因子 | PIT 基本面、资金流、股东户数、行业宽度；月度链路做覆盖率和缺失标记诊断 |
-| 特征处理 | 截面 winsorize、z-score、缺失填充、市值/行业中性化 |
-| 打分模型 | 线性 `composite` / `composite_extended`、月度 M6 learning-to-rank |
-| 市场状态 | Regime Switch 根据基准短中期收益与波动率调整线性因子权重，可用 `510300` 或 `market_ew_proxy` |
-| 组合权重 | 等权、分数权重、分层等权、风险平价、最小方差、均值-方差；支持 Ledoit-Wolf、EWMA、行业因子协方差 |
-| 回测评估 | `tplus1_open` 执行口径，涨停买入失败 `idle` / `redistribute`，交易成本 |
-| 报告与研究治理 | Markdown 报告工具、研究身份、配置快照、manifest、promoted registry，位于 `src/reporting/` 与 `src/research/` |
-
-## 技术栈
-
-- 数据：AkShare、DuckDB、Pandas / Polars / NumPy。
-- 计算：PyTorch 张量因子，自动在 CUDA 不可用时回退 CPU。
-- 机器学习：scikit-learn、XGBoost、PyTorch 序列模型。
-- 组合优化：SciPy、Ledoit-Wolf / EWMA / 行业因子协方差。
-- 运行环境：Python 3.10.x，可编辑安装 `pip install -e .`。
-
-## 仓库结构
-
-```text
-.
-├── config.yaml.example      # 本地月度选股配置模板
-├── config.yaml.backtest     # 当前 canonical 研究回测配置入口
-├── configs/
-│   ├── experiments/         # 临时探索配置
-│   └── promoted/            # 生产 promotion registry
-├── docs/
-│   ├── README.md            # 文档目录说明
-│   ├── plan.md              # 当前月度选股研究计划
-│   ├── 月度选股流程说明.md
-│   ├── 项目算法建模详解.md
-│   └── reports/             # 按月份归档的研究报告与证据链
-├── src/
-│   ├── data_fetcher/        # AkShare、DuckDB、质量检查、基本面/资金流/股东数据
-│   ├── features/            # 因子、标准化、中性化、正交化、IC 评估
-│   ├── market/              # 可交易性与 Regime Switch
-│   ├── models/              # 打分、训练、推理、工件管理
-│   ├── portfolio/           # 协方差、权重优化、约束
-│   ├── backtest/            # 回测引擎、成本、绩效
-│   ├── pipeline/            # 月度选股标签与正式回测的核心管线逻辑
-│   ├── reporting/           # Markdown 表格、JSON 序列化、月度推荐报告工具
-│   └── research/            # 共享 gates、候选池规则、研究 manifest 记录
-├── scripts/
-│   ├── fetch_only.py                        # 更新月度链路所需日线表
-│   ├── run_monthly_selection_dataset.py     # M2 CLI 编排，核心在 src/pipeline/monthly_dataset.py
-│   ├── run_monthly_selection_oracle.py      # M3 oracle 上限诊断
-│   ├── run_monthly_selection_baselines.py   # M4 baseline，兼容导出共享评估工具
-│   ├── run_monthly_selection_multisource.py # M5 CLI 编排，核心在 src/pipeline/monthly_multisource.py
-│   ├── run_monthly_selection_ltr.py         # M6 CLI 编排，核心在 src/pipeline/monthly_ltr.py
-│   ├── run_monthly_selection_report.py      # M7 CLI 编排，核心在 src/reporting/monthly_report.py
-│   ├── run_monthly_selection_concentration_regime.py  # M8 行业集中度约束
-│   ├── run_monthly_selection_m8_natural_industry_constraints.py  # M8 自然化行业约束
-│   └── run_monthly_benchmark_suite.py       # 月度选股基准评估套件
-└── tests/
-```
-
-`data/`、`tmp/`、`.pytest_cache/`、`.ruff_cache/`、`__pycache__/`、`.conda_envs/`、`.conda_pkgs/`、`.miniforge3/` 是本机私有或可再生产物，默认不进入版本控制和 Docker build context。
-
-## 模块化边界
-
-`scripts/run_*.py` 保持为稳定 CLI 入口，负责参数解析、路径解析、文件 I/O、报告落盘和 manifest 记录。新开发和维护应优先修改 `src/` 下的核心模块：
-
-| 模块 | 职责 |
-| --- | --- |
-| `src/pipeline/monthly_dataset.py` | M2 月度截面、候选池、open-to-open 标签、质量摘要 |
-| `src/pipeline/monthly_baselines.py` | M4/M5/M6 共享的候选池有效样本、截面打分基列、sklearn/XGBoost 训练预测 helper |
-| `src/pipeline/monthly_multisource.py` | M5 行业宽度、资金流、基本面、股东户数特征接入与增量评估 |
-| `src/pipeline/monthly_ltr.py` | M6 walk-forward learning-to-rank、top20 calibrated 与 ranker ensemble |
-| `src/reporting/monthly_report.py` | M7 最新信号月 full-fit 打分、推荐名单与 M9 覆盖率策略 |
-| `src/pipeline/backtest_runner.py` | 正式回测的因子计算、缓存、打分、Top-K 权重、基准、Regime 调权与动态 IC 权重 |
-| `src/pipeline/label_builder.py` | P1 树模型训练标签、可投资持有期收益面板和调仓日选择 |
-| `src/research/gates.py` | 共享候选池规则、标签列名、预过滤器与 P1 因子策略 |
-| `src/reporting/markdown_report.py` | Markdown 表格、JSON-safe 序列化、项目相对路径与通用报告片段 |
-| `src/research/manifest.py` | 研究身份工厂、标准 manifest 与本地实验索引记录 |
-
-部分脚本仍保留本地函数副本或 re-export 以兼容既有测试、历史研究脚本和 M5-M8 调用；这些副本不应作为后续维护的主位置。`src/pipeline/`、`src/reporting/`、`src/research/` 不应反向导入 `scripts/`，脚本只能调用核心模块或保留兼容薄层。
-
-## 环境安装
-
-Python 版本要求是 3.10.x，推荐 3.10.12。
+## Quick Start
 
 ```bash
 cp config.yaml.example config.yaml
-```
-
-可通过环境变量覆盖配置路径：
-
-```bash
-export QUANT_CONFIG=/absolute/path/to/config.yaml
-```
-
-Conda / Jetson 推荐：
-
-```bash
-conda env create -f environment.yml
-conda activate quant-system
-bash scripts/bootstrap_conda_env.sh
-```
-
-x86_64 桌面环境可直接：
-
-```bash
 pip install -r requirements.txt
 pip install -e .
+
+python scripts/fetch_stock.py --symbol 600930 --check-quality
+python scripts/run_signal.py --symbol 600930 --history 60
+python scripts/run_backtest_single.py --symbol 600930 --compare-modes
 ```
 
-Jetson 上不要用 `requirements.txt` 安装 PyTorch，应走 `bootstrap_conda_env.sh` 或 NVIDIA 官方 wheel。环境自检：
+## Trend Modes
+
+| mode | rule | use case |
+| --- | --- | --- |
+| `macd_cross` | `EMA(12)-EMA(26)` crosses its 9-day signal | default, lower turnover |
+| `ma_cross` | smoothed `MA5-MA20` | simple trend confirmation |
+| `boll_trend` | close above/below MA20 | simplest baseline |
+
+Signals are emitted only when the color changes:
+
+- green to red: `buy`
+- red to green: `sell`
+- same color: `hold`
+
+Backtests execute signals on the next trading day's open. If a buy execution day opens at limit-up, the buy is delayed until the first open that is not limit-up.
+
+## Main Commands
+
+Fetch one or more stocks:
 
 ```bash
-python scripts/env_check.py
+python scripts/fetch_stock.py --symbols 600930 000001 300750
 ```
 
-AkShare 网络不稳时可先跑：
+Show the latest signal:
 
 ```bash
-python scripts/akshare_network_doctor.py
+python scripts/run_signal.py --symbol 600930 --mode macd_cross
+python scripts/run_signal.py --watchlist 600930 000001 300750 --filter buy
 ```
 
-Docker / Jetson 辅助脚本仍保留：
+Run a backtest:
 
 ```bash
-bash scripts/docker_build_jetson.sh
-bash scripts/docker_run.sh
+python scripts/run_backtest_single.py --symbol 600930 --start 2020-01-01 --end 2025-12-31
+python scripts/run_backtest_single.py --symbol 600930 --export-trades
 ```
 
-Jetson 构建优先使用 NVIDIA 官方 PyTorch wheel；若遇到 cuSPARSELt 前置依赖问题，可参考 `scripts/install_cusparselt.sh`。
+## Structure
 
-## 快速开始
-
-更新月度链路所需日线数据库：
-
-```bash
-python scripts/fetch_only.py --max-symbols 50
+```text
+src/
+  data_fetcher/     AkShare fetch, DuckDB storage, data quality checks
+  indicators/       DK trend formulas
+  signals/          signal records and current-state helpers
+  backtest/         costs, performance metrics, single-stock backtest
+  market/           A-share tradability helpers
+  notify/           optional WeCom webhook notification
+scripts/
+  fetch_stock.py
+  run_signal.py
+  run_backtest_single.py
 ```
-
-运行月度选股研究链路：
-
-```bash
-python scripts/run_monthly_selection_dataset.py --config config.yaml.backtest
-python scripts/run_monthly_selection_oracle.py --config config.yaml.backtest
-python scripts/run_monthly_selection_baselines.py --config config.yaml.backtest
-python scripts/run_monthly_selection_multisource.py --config config.yaml.backtest
-python scripts/run_monthly_selection_ltr.py --config config.yaml.backtest
-python scripts/run_monthly_selection_report.py --config config.yaml.backtest
-```
-
-数据扩展入口：
-
-```bash
-python scripts/build_industry_map.py
-python scripts/fetch_fundamental.py --max-symbols 100
-python scripts/fetch_fund_flow.py --max-symbols 100
-python scripts/fetch_shareholder.py --latest-n 4
-```
-
-## 配置边界
-
-| 配置 | 用途 |
-| --- | --- |
-| `config.yaml.example` | 本地月度选股模板，默认不承载未 promotion 的研究候选 |
-| `config.yaml` | 本机私有运行配置，可由 `QUANT_CONFIG` 覆盖 |
-| `config.yaml.backtest` | 当前 canonical 研究回测入口 |
-| `configs/backtests/` | 历史研究快照与变体 |
-| `configs/promoted/promoted_registry.json` | 唯一生产准入注册表 |
-
-关键配置段：
-
-- `paths`：DuckDB、结果、日志、模型与实验目录。
-- `database`：日线、基本面、资金流、股东表名。
-- `features`：窗口、K 线结构代理因子、是否做市值中性化。
-- `signals`：`top_k`、`sort_by`、线性权重、树模型工件、IC 动态权重。
-- `prefilter`：候选池硬过滤规则。
-- `regime`：大盘状态分类与动态权重。
-- `portfolio`：权重方法、单票上限、行业约束、协方差估计、换手约束。
-- `backtest`：执行口径、调仓频率、涨停买入失败处理。
-- `transaction_costs`：佣金、滑点、印花税，默认双边约 19 bps。
-
-## 当前研究纪律
-
-月度选股当前生产默认方法为 `U1_liquid_tradable + Top20 + M8+quality indcap3`，对应 promoted config `monthly_selection_m8_indcap3_plus_quality`。交易时点为：持有月最后一个交易日卖出当月 Top20，下一交易日开盘买入下一月 Top20。其他 M5/M6/M8 变体仍按研究产物处理，除非进入 `configs/promoted/promoted_registry.json`。
-
-旧 replacement / sleeve / gray zone 候选已经在 2026-04 的报告中被冻结或拒绝。轻量 `signal_diagnostic`、`light_strategy_proxy` 与 gray zone 都不是 promotion 终点。只有正式 full backtest、OOS、状态切片、边界诊断、成本、universe 与人工确认完整可追溯后，才允许新增 promoted 配置。
-
-## 测试
-
-```bash
-pip install -e ".[dev]"
-pytest
-```
-
-如果只改文档，通常不需要跑完整测试；改代码、配置或默认策略时至少应跑相关 pytest，并保留生成的研究 manifest / report。
-
-## 风险提示
-
-本系统输出的是研究与筛选结果，不构成任何投资建议。实际交易仍需结合流动性、公告、行业事件、仓位管理和个人风险承受能力独立判断。

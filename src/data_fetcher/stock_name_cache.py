@@ -1,10 +1,4 @@
-"""股票名称缓存。
-
-从 scripts/run_monthly_selection_report.py 提取：
-- 名称缓存归一化与加载
-- 缓存自动维护（超期/缺失时拉取）
-- 名称列检测与 attach 逻辑
-"""
+"""Stock name cache helpers."""
 
 from __future__ import annotations
 

@@ -11,22 +11,15 @@ from typing import Optional
 
 import requests
 
+from src.signals.types import Signal
+
 logger = logging.getLogger(__name__)
 
 
 class WecomWebhookHandler:
     """P2-8: 企业微信机器人 Webhook 告警处理器。
 
-    将 ICDecayAlert 等告警消息通过企业微信群机器人推送。
-
-    用法::
-
-        from src.notify.webhook import WecomWebhookHandler
-        from src.features.ic_monitor import ICMonitor
-
-        handler = WecomWebhookHandler(url="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=YOUR_KEY")
-        monitor = ICMonitor(store_path="data/logs/ic_monitor.json", db_path="data/market.duckdb")
-        alerts = monitor.check_decay_alerts(window=20, threshold=0.03, alert_handler=handler)
+    Send markdown or text messages through a WeCom group robot.
     """
 
     def __init__(self, url: str, *, timeout: float = 10.0, mention_all: bool = False) -> None:
@@ -149,3 +142,23 @@ class WecomWebhookHandler:
         except (json.JSONDecodeError, ValueError) as exc:
             logger.error("企业微信 Webhook 响应解析失败: %s", exc)
             return False
+
+
+def send_trend_signal(
+    handler: WecomWebhookHandler,
+    symbol: str,
+    stock_name: str,
+    signal: Signal,
+    close: float,
+    dk_run_len: int,
+    trade_date: str,
+) -> bool:
+    """Send a DK trend signal message through a WeCom webhook handler."""
+    action = "买入信号" if signal == Signal.BUY else "卖出信号"
+    trend = "趋势刚变红" if signal == Signal.BUY else "趋势刚变绿"
+    content = (
+        f"【多空趋势信号】{stock_name} ({symbol})\n"
+        f"{action} | {trade_date}\n"
+        f"收盘价：{close:.2f} | {trend} | 连续 {int(dk_run_len)} 天"
+    )
+    return handler.send_markdown(content)
