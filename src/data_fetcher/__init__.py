@@ -25,7 +25,13 @@ __all__ = [
 
 def __getattr__(name: str):
     if name in {"QualityConfig", "QualityReport", "check_split_jump", "run_quality_checks", "validate_daily_frame"}:
-        from .data_quality import QualityConfig, QualityReport, check_split_jump, run_quality_checks, validate_daily_frame
+        from .data_quality import (
+            QualityConfig,
+            QualityReport,
+            check_split_jump,
+            run_quality_checks,
+            validate_daily_frame,
+        )
 
         return {
             "QualityConfig": QualityConfig,

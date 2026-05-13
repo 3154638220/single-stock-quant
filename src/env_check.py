@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import socket
 import sys
 from pathlib import Path
@@ -27,7 +28,7 @@ def _dns_summary(hosts: list[str]) -> str:
             infos = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
             ips: list[str] = []
             for item in infos:
-                ip = item[4][0]
+                ip = str(item[4][0])
                 if ip not in ips:
                     ips.append(ip)
             pairs.append(f"{host}={'/'.join(ips[:2])}")
@@ -48,10 +49,10 @@ def run_checks(*, config: Path | None, quiet: bool) -> int:
 
     failed = 0
 
-    # Python 3.10.x
+    # Python 3.10+
     vi = sys.version_info
-    if vi.major != 3 or vi.minor != 10:
-        _fail(f"期望 Python 3.10.x，当前 {vi.major}.{vi.minor}.{vi.micro}", quiet=quiet)
+    if vi.major != 3 or vi.minor < 10:
+        _fail(f"期望 Python >=3.10，当前 {vi.major}.{vi.minor}.{vi.micro}", quiet=quiet)
         failed += 1
     else:
         _ok(f"Python {vi.major}.{vi.minor}.{vi.micro}", quiet=quiet)

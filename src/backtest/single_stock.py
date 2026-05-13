@@ -188,7 +188,6 @@ def run_single_stock_backtest(
             }
         )
         in_pos = False
-        entry_idx = None
     equity[last_idx] = cash
     for k in range(1, len(equity)):
         if equity[k] == 0:

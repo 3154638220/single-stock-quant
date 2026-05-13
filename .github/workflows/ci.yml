@@ -53,6 +53,9 @@ jobs:
 
       - name: Smoke test imports
         run: |
-          python -c "from src.pipeline.monthly_dataset import build_monthly_selection_dataset"
           python -c "from src.data_fetcher.db_manager import DuckDBManager"
-          python -c "from src.features.ic_monitor import ICMonitor"
+          python -c "from src.indicators import compute_dktrend, DKTrendParams, TrendMode"
+          python -c "from src.signals import Signal"
+          python -c "from src.backtest.single_stock import run_single_stock_backtest"
+          python -c "from src.notify import WecomWebhookHandler, send_trend_signal"
+          python -c "import scripts.run_signal; import scripts.run_backtest_single; import scripts.fetch_stock"

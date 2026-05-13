@@ -2,9 +2,9 @@ import duckdb
 import numpy as np
 import pandas as pd
 
+import src.data_fetcher as data_fetcher
 from src.backtest.engine import BacktestConfig, run_backtest
 from src.backtest.transaction_costs import TransactionCostParams, cost_params_dict_for_logging
-import src.data_fetcher as data_fetcher
 from src.data_fetcher.migrations import apply_migrations
 
 
