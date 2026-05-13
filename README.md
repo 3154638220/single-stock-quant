@@ -60,8 +60,9 @@ invalid OHLC rows. Use `--quality-allow-nulls` or
 `--quality-allow-invalid-ohlc` only when you intentionally want a soft check.
 
 New DuckDB files create only the daily data and fetch-audit tables by default.
-Set `database.apply_legacy_migrations: true` only when you need old research
-tables from a previous version of the project.
+`database.apply_legacy_migrations` is off by default; enabling it now only
+records a compact schema version marker and keeps very old daily-bar files
+compatible. Old research/OOS tables are no longer created.
 
 Show the latest signal:
 

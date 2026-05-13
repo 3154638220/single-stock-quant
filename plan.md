@@ -897,3 +897,24 @@ python scripts/run_backtest_single.py --symbol 600930 --compare-modes
 # ma_cross   total=-9.50%, buy_hold=-11.48%, excess=+1.99%, sharpe=-0.54, max_dd=19.46%, trades=7, win_rate=28.57%
 # boll_trend total=-9.79%, buy_hold=-11.48%, excess=+1.69%, sharpe=-0.53, max_dd=18.00%, trades=10, win_rate=10.00%
 ```
+
+2026-05-13 本轮继续推进（旧兼容逻辑裁剪）：
+
+1. `src/backtest/engine.py`：从旧组合回测引擎降级为轻量兼容层，只保留日收益矩阵、简单多头权重、换手成本和绩效统计；移除 VWAP 冲击、分层冲击、涨停增量权重重分配等旧组合逻辑。
+2. `src/backtest/transaction_costs.py`：移除 `sqrt_adv` / `impact_model` / `impact_k` 等市场冲击模型，仅保留买入佣金、卖出佣金、滑点、印花税和换手成本函数。
+3. `src/data_fetcher/migrations.py`：迁移表收敛到 `a_share_daily`、衍生列和 `data_fetch_audit`，不再包含 `ic_monitor`、`oos_tracking`、基本面、资金流、概念、北向等旧研究表 DDL。
+4. `README.md`：更新 `database.apply_legacy_migrations` 说明，明确开启后也不会再创建旧研究/OOS 表。
+5. `tests/test_compat_cleanup.py`：新增回归测试，覆盖迁移不创建旧研究表、交易成本日志不再包含冲击模型字段、轻量兼容回测仍可运行。
+
+本轮验收：
+
+```bash
+python -m py_compile src/backtest/engine.py src/backtest/transaction_costs.py src/data_fetcher/migrations.py src/backtest/risk_metrics.py
+# passed
+
+pytest tests/test_compat_cleanup.py tests/test_db_manager_schema.py tests/test_event_log.py
+# 5 passed, 1 warning
+
+pytest
+# 22 passed, 1 warning
+```

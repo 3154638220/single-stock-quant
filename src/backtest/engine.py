@@ -1,4 +1,10 @@
-"""标准回测接口：信号（权重）、调仓频率、成本模型、风险约束 → 日收益序列与统一绩效。"""
+"""Small compatibility backtest engine for daily return series.
+
+The production single-stock path lives in ``src.backtest.single_stock``. This
+module remains as a lightweight helper for tests, notebooks, and any local code
+that still wants to evaluate a precomputed daily return matrix with simple
+long-only weights.
+"""
 
 from __future__ import annotations
 
@@ -9,32 +15,23 @@ import numpy as np
 import pandas as pd
 
 from src.backtest.performance_panel import PerformancePanel, compute_performance_panel
-from src.backtest.risk_metrics import risk_config_from_mapping
 from src.backtest.transaction_costs import TransactionCostParams, turnover_cost_drag
 
 
 @dataclass
 class TieredImpactConfig:
-    """P2-9: 按 amount_20d 分层冲击成本 — 小市值冲击成本可数倍于大市值。
+    """Deprecated placeholder kept for old imports."""
 
-    三档阈值（CNY）：
-    - large: amount_20d >= large_cap_threshold
-    - mid:   large_cap_threshold > amount_20d >= mid_cap_threshold
-    - small: amount_20d < mid_cap_threshold
-    """
-
-    large_cap_threshold: float = 500_000_000.0   # >= 5 亿
-    mid_cap_threshold: float = 100_000_000.0     # >= 1 亿
+    large_cap_threshold: float = 500_000_000.0
+    mid_cap_threshold: float = 100_000_000.0
     large_slippage_bps: float = 1.5
     large_impact_bps: float = 4.0
     mid_slippage_bps: float = 3.0
     mid_impact_bps: float = 8.0
-    # 小市值冲击成本参考国内公募量化研究（20–50 bps）
     small_slippage_bps: float = 5.0
     small_impact_bps: float = 20.0
 
     def get_params(self, amount_20d: float) -> tuple[float, float]:
-        """返回 (slippage_bps, impact_bps) 对应给定 amount_20d 的档位。"""
         a = float(amount_20d)
         if not np.isfinite(a) or a <= 0:
             return (self.small_slippage_bps, self.small_impact_bps)
@@ -47,57 +44,69 @@ class TieredImpactConfig:
 
 @dataclass
 class BacktestConfig:
-    """回测配置：成本、无风险利率、年化基准、风险约束（与现有 risk 配置兼容）。"""
-
     cost_params: Optional[TransactionCostParams] = None
     risk_free_daily: float = 0.0
     periods_per_year: float = 252.0
-    # 若权重行和 > 1 或需限制总敞口，先缩放至 sum(w) <= max_gross_exposure（再归一化）
     max_gross_exposure: float = 1.0
-    # 可选：与 risk_metrics.risk_config_from_mapping 同结构的极端行情等（预留扩展）
-    risk_cfg: Dict[str, Any] = field(default_factory=dict)
-    # ``close_to_close``：asset_returns 为当日收盘/昨收 -1；
-    # ``tplus1_open``：须为 open(t+1)/open(t)-1（隔夜+日内至次日开盘）；
-    # ``vwap``：与 close_to_close 同收益口径，但在调仓日额外扣减 VWAP 执行冲击。
     execution_mode: str = "close_to_close"
-    # 仅 ``close_to_close`` / ``vwap``：组合收益用 ``w_{t-1-L}^T r_t``（``L`` 为本字段；0=历史默认）。
     execution_lag: int = 0
-    # 涨停买入失败处理模式（仅 tplus1_open 模式下有效）：
-    # ``idle``：资金闲置（涨停票的新增/增持权重冻结，已有持仓继续获得收益）
-    # ``redistribute``：将涨停票的新增权重均匀分配给同日其他可买标的
-    # P1-4: 两种模式均只冻结新增/增持权重，不冻结已有持仓收益。
-    limit_up_mode: str = "idle"
-    # 真实开盘涨停不可买 mask，索引为入场日，列为标的。
-    # True 表示该日 open / pre_close 触及对应板块涨停；仅影响新增/增持权重。
-    limit_up_open_mask: Optional[pd.DataFrame] = None
-    # vwap 模式额外执行惩罚（按 half L1 换手比例缩放）：
-    # extra_drag = turnover * (vwap_slippage_bps_per_side + vwap_impact_bps * turnover) / 1e4
-    vwap_slippage_bps_per_side: float = 3.0
-    vwap_impact_bps: float = 8.0
-    # P2-9: 分层冲击成本 — 启用后按 amount_20d 三档使用独立 slippage/impact 参数
-    use_tiered_impact: bool = False
-    tiered_impact: Optional[TieredImpactConfig] = None
-    # 换仓频率：W=周, M=月, BM=双月, Q=季（H2 参数化）
-    rebalance_rule: str = "M"
+    rebalance_rule: str = ""
+    risk_cfg: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class BacktestResult:
-    """引擎输出：日收益、换手、绩效面板。"""
-
     daily_returns: pd.Series
-    rebalance_turnover: pd.Series  # 仅调仓日有值，其余 NaN
+    rebalance_turnover: pd.Series
     panel: PerformancePanel
     meta: Dict[str, Any] = field(default_factory=dict)
 
 
-def _align_weights_columns(
-    weights: pd.DataFrame,
-    asset_cols: List[str],
+def _align_weights_columns(weights: pd.DataFrame, asset_cols: List[str]) -> pd.DataFrame:
+    return weights.reindex(columns=asset_cols, fill_value=0.0).astype(np.float64)
+
+
+def _normalize_long_only(row: np.ndarray, max_gross_exposure: float) -> np.ndarray:
+    w = np.asarray(row, dtype=np.float64)
+    w = np.where(np.isfinite(w), w, 0.0)
+    w = np.maximum(w, 0.0)
+    total = float(w.sum())
+    if total <= 0:
+        return np.zeros_like(w, dtype=np.float64)
+    cap = float(max_gross_exposure)
+    if cap <= 0:
+        return np.zeros_like(w, dtype=np.float64)
+    return w / total * min(total, cap)
+
+
+def build_daily_weights(
+    trading_index: pd.DatetimeIndex,
+    weights_rebalance: pd.DataFrame,
+    *,
+    max_gross_exposure: float = 1.0,
 ) -> pd.DataFrame:
-    """将权重表列对齐到收益表列顺序；缺失列视为 0。"""
-    w = weights.reindex(columns=asset_cols, fill_value=0.0)
-    return w.astype(np.float64)
+    """Forward-fill rebalance weights over a full trading-day index."""
+    if weights_rebalance.empty:
+        raise ValueError("weights_rebalance is empty")
+    ti = pd.DatetimeIndex(pd.to_datetime(trading_index).normalize())
+    wr = weights_rebalance.sort_index().copy()
+    wr.index = pd.to_datetime(wr.index).normalize()
+    wr = wr[wr.index.isin(ti)]
+    if wr.empty:
+        raise ValueError("rebalance dates are not present in trading_index")
+
+    out = pd.DataFrame(index=ti, columns=wr.columns, dtype=np.float64)
+    current: np.ndarray | None = None
+    for dt in ti:
+        if dt in wr.index:
+            row = wr.loc[dt]
+            if isinstance(row, pd.DataFrame):
+                row = row.iloc[-1]
+            current = _normalize_long_only(row.to_numpy(dtype=np.float64), max_gross_exposure)
+        if current is None:
+            current = np.zeros(len(wr.columns), dtype=np.float64)
+        out.loc[dt] = current
+    return out
 
 
 def build_limit_up_open_mask(
@@ -106,46 +115,28 @@ def build_limit_up_open_mask(
     date_col: str = "trade_date",
     sym_col: str = "symbol",
 ) -> pd.DataFrame:
-    """构造入场日一字涨停不可买 mask，索引为交易日，列为标的。"""
+    """Build a wide mask for open limit-up days from an OHLCV long table."""
     from src.market.tradability import is_open_limit_up_unbuyable
 
     if daily_long.empty:
-        raise ValueError("daily_long 为空")
-    need = {date_col, sym_col, "open", "close"}
-    miss = need - set(daily_long.columns)
-    if miss:
-        raise ValueError(f"daily_long 缺少列: {miss}")
+        raise ValueError("daily_long is empty")
+    missing = {date_col, sym_col, "open", "close"} - set(daily_long.columns)
+    if missing:
+        raise ValueError(f"daily_long missing columns: {sorted(missing)}")
 
+    rows: list[dict[str, Any]] = []
     df = daily_long.copy()
     df[sym_col] = df[sym_col].astype(str).str.zfill(6)
     df[date_col] = pd.to_datetime(df[date_col]).dt.normalize()
-    chunks: List[pd.DataFrame] = []
     for sym, g in df.groupby(sym_col, sort=False):
         g = g.sort_values(date_col)
+        prev_close = pd.to_numeric(g.get("pre_close", g["close"].shift(1)), errors="coerce")
         open_px = pd.to_numeric(g["open"], errors="coerce")
-        if "pre_close" in g.columns:
-            prev_close = pd.to_numeric(g["pre_close"], errors="coerce")
-        else:
-            prev_close = pd.to_numeric(g["close"], errors="coerce").shift(1)
-        mask = [
-            is_open_limit_up_unbuyable(float(o), float(pc), str(sym))
-            if np.isfinite(float(o)) and np.isfinite(float(pc))
-            else False
-            for o, pc in zip(open_px, prev_close)
-        ]
-        chunks.append(
-            pd.DataFrame(
-                {
-                    date_col: g[date_col].values,
-                    sym_col: sym,
-                    "_limit_up_open": mask,
-                }
-            )
-        )
-    long_mask = pd.concat(chunks, ignore_index=True)
-    wide = long_mask.pivot(index=date_col, columns=sym_col, values="_limit_up_open")
-    wide = wide.sort_index().fillna(False)
-    return wide.astype(bool)
+        for dt, o, pc in zip(g[date_col], open_px, prev_close):
+            mask = bool(np.isfinite(o) and np.isfinite(pc) and is_open_limit_up_unbuyable(float(o), float(pc), sym))
+            rows.append({date_col: dt, sym_col: sym, "_limit_up_open": mask})
+    long_mask = pd.DataFrame(rows)
+    return long_mask.pivot(index=date_col, columns=sym_col, values="_limit_up_open").fillna(False).astype(bool)
 
 
 def build_open_to_open_returns(
@@ -155,172 +146,28 @@ def build_open_to_open_returns(
     sym_col: str = "symbol",
     zero_if_limit_up_open: bool = False,
 ) -> pd.DataFrame:
-    """
-    由日线长表构造「开盘到次日开盘」单日简单收益宽表，索引为交易日，与 ``run_backtest(..., execution_mode='tplus1_open')`` 输入一致。
-
-    第 ``t`` 行、``s`` 列：``open(t+1,s)/open(t,s)-1``（最后一行全为 ``nan`` 或 0）。
-
-    .. warning::
-
-       **P1-4**: ``zero_if_limit_up_open=True`` 会将涨停日收益置 0，这混淆了
-       「当日无法新买入」（买入约束）与「现有持仓在涨停日仍有收益」（持仓收益）。
-       该参数仅适用于评估**新建仓**信号（无存量持仓的场景），**不应用于组合回测**。
-       组合回测请使用 ``run_backtest(..., limit_up_mode='idle')`` 并在引擎层
-       自动区分增量与存量权重。
-    """
+    """Build open(t+1) / open(t) - 1 returns from an OHLCV long table."""
     if daily_long.empty:
-        raise ValueError("daily_long 为空")
-    need = {date_col, sym_col, "open", "close"}
-    miss = need - set(daily_long.columns)
-    if miss:
-        raise ValueError(f"daily_long 缺少列: {miss}")
+        raise ValueError("daily_long is empty")
+    missing = {date_col, sym_col, "open"} - set(daily_long.columns)
+    if missing:
+        raise ValueError(f"daily_long missing columns: {sorted(missing)}")
 
     df = daily_long.copy()
     df[sym_col] = df[sym_col].astype(str).str.zfill(6)
     df[date_col] = pd.to_datetime(df[date_col]).dt.normalize()
-    chunks: List[pd.DataFrame] = []
-    limit_mask = build_limit_up_open_mask(daily_long, date_col=date_col, sym_col=sym_col) if zero_if_limit_up_open else None
+    limit_mask = build_limit_up_open_mask(df, date_col=date_col, sym_col=sym_col) if zero_if_limit_up_open else None
+    rows: list[dict[str, Any]] = []
     for sym, g in df.groupby(sym_col, sort=False):
         g = g.sort_values(date_col)
         o = pd.to_numeric(g["open"], errors="coerce")
-        o2o = o.shift(-1) / o - 1.0
+        ret = o.shift(-1) / o - 1.0
         if limit_mask is not None and sym in limit_mask.columns:
-            sym_mask = limit_mask.reindex(pd.to_datetime(g[date_col]).dt.normalize())[sym].fillna(False).to_numpy(bool)
-            o2o = o2o.mask(sym_mask, 0.0)
-        chunks.append(
-            pd.DataFrame(
-                {
-                    date_col: g[date_col].values,
-                    sym_col: sym,
-                    "_o2o": o2o.values,
-                }
-            )
-        )
-    long_o2o = pd.concat(chunks, ignore_index=True)
-    wide = long_o2o.pivot(index=date_col, columns=sym_col, values="_o2o")
-    wide = wide.sort_index()
-    return wide.astype(np.float64)
-
-
-def _redistribute_limit_up_weights(
-    w: np.ndarray,
-    limit_up_mask: np.ndarray,
-) -> np.ndarray:
-    """
-    将涨停票的权重均匀重分配给同日其余可买标的（顺延逻辑）。
-
-    Parameters
-    ----------
-    w
-        当日权重向量（归一化后），长度 k。
-    limit_up_mask
-        布尔数组，True 表示该票涨停买入失败。
-
-    Returns
-    -------
-    w_new : ndarray，重分配后权重（仍归一化）
-    """
-    w = np.asarray(w, dtype=np.float64).copy()
-    lim = np.asarray(limit_up_mask, dtype=bool)
-    if not lim.any():
-        return w
-    stranded = float(np.sum(w[lim]))
-    w[lim] = 0.0
-    # 将滞留资金按现有权重比例重分配给非涨停票
-    available = ~lim
-    avail_sum = float(np.sum(w[available]))
-    if avail_sum > 1e-15:
-        w[available] += w[available] / avail_sum * stranded
-    # 若所有票均涨停，资金闲置（全部置 0）
-    return w
-
-
-def _apply_limit_up_buy_fail(
-    target_w: np.ndarray,
-    prior_w: np.ndarray,
-    limit_up_mask: np.ndarray,
-    *,
-    mode: str,
-) -> tuple[np.ndarray, np.ndarray, float, float, float]:
-    """只冻结新增/增持部分；已有持仓继续承受当日收益。"""
-    target = np.asarray(target_w, dtype=np.float64).copy()
-    prior = np.asarray(prior_w, dtype=np.float64)
-    lim = np.asarray(limit_up_mask, dtype=bool)
-    buy_delta = np.maximum(target - prior, 0.0)
-    failed_delta = np.where(lim, buy_delta, 0.0)
-    failed_total = float(np.nansum(failed_delta))
-    if failed_total <= 1e-15:
-        return target, failed_delta, 0.0, 0.0, 0.0
-
-    effective = target - failed_delta
-    redistributed_total = 0.0
-    if mode == "redistribute":
-        available = ~lim
-        avail_sum = float(np.nansum(effective[available]))
-        if avail_sum > 1e-15:
-            effective[available] += effective[available] / avail_sum * failed_total
-            redistributed_total = failed_total
-    idle_total = failed_total - redistributed_total
-    return effective, failed_delta, failed_total, redistributed_total, idle_total
-
-
-def _amount_tier_label(amount_20d: float, cfg: TieredImpactConfig | None) -> str:
-    """返回 amount_20d 对应的市值分档标签。"""
-    if cfg is None:
-        return "mid"
-    a = float(amount_20d)
-    if not np.isfinite(a) or a <= 0:
-        return "small"
-    if a >= cfg.large_cap_threshold:
-        return "large"
-    if a >= cfg.mid_cap_threshold:
-        return "mid"
-    return "small"
-
-
-def _apply_gross_exposure(w: np.ndarray, max_gross: float) -> np.ndarray:
-    """若 sum(w) > max_gross，整体缩放。"""
-    s = float(np.nansum(np.maximum(w, 0.0)))
-    if s <= 0:
-        return np.zeros_like(w, dtype=np.float64)
-    cap = float(max_gross)
-    if cap > 0 and s > cap:
-        return w * (cap / s)
-    return w
-
-
-def build_daily_weights(
-    trading_index: pd.DatetimeIndex,
-    weights_rebalance: pd.DataFrame,
-    *,
-    max_gross_exposure: float = 1.0,
-) -> pd.DataFrame:
-    """
-    将调仓日权重前向填充到完整交易日索引；调仓日须为 ``trading_index`` 的子集。
-    """
-    if weights_rebalance.empty:
-        raise ValueError("weights_rebalance 为空")
-    wr = weights_rebalance.sort_index()
-    wr.index = pd.to_datetime(wr.index).normalize()
-    ti = pd.DatetimeIndex(pd.to_datetime(trading_index).normalize())
-    # 仅保留交易日上存在的调仓日
-    wr = wr[wr.index.isin(ti)]
-    if wr.empty:
-        raise ValueError("调仓日不在 trading_index 中")
-    cols = wr.columns.tolist()
-    out = pd.DataFrame(index=ti, columns=cols, dtype=np.float64)
-    for i, dt in enumerate(ti):
-        # 最后一个 <= dt 的调仓行
-        sub = wr.loc[wr.index <= dt]
-        if sub.empty:
-            raise ValueError(f"日期 {dt} 之前无调仓权重")
-        row = sub.iloc[-1].to_numpy(dtype=np.float64)
-        row = _apply_gross_exposure(row, max_gross_exposure)
-        s = row.sum()
-        if s > 0:
-            row = row / s
-        out.iloc[i] = row
-    return out
+            mask = limit_mask.reindex(g[date_col])[sym].fillna(False).to_numpy(bool)
+            ret = ret.mask(mask, 0.0)
+        rows.append(pd.DataFrame({date_col: g[date_col].values, sym_col: sym, "_ret": ret.values}))
+    long_ret = pd.concat(rows, ignore_index=True)
+    return long_ret.pivot(index=date_col, columns=sym_col, values="_ret").sort_index().astype(np.float64)
 
 
 def run_backtest(
@@ -328,239 +175,69 @@ def run_backtest(
     weights_signal: pd.DataFrame,
     *,
     config: Optional[BacktestConfig] = None,
-    # 调仓频率：若给定，从 weights_signal 中按规则重采样（仅保留该频率的调仓日）
     rebalance_rule: Optional[str] = None,
-    # P2-9: 日度 amount_20d 宽表（与 asset_returns 同行同列），用于分层冲击成本
     daily_amount: Optional[pd.DataFrame] = None,
 ) -> BacktestResult:
-    """
-    标准回测：输入资产日收益宽表 + 信号权重宽表（按调仓日行），输出日组合收益与绩效面板。
-
-    Parameters
-    ----------
-    asset_returns
-        索引为交易日，列为标的，值为**当日**简单收益。
-    weights_signal
-        索引为调仓日（须为 ``asset_returns.index`` 的子集），列为标的，非负权重（将归一化）。
-        即「信号」已体现在权重上；若需由得分转权重，请在组合层先调用 ``build_portfolio_weights``。
-    rebalance_rule
-        若给定（如 ``"W-FRI"``），先将 ``weights_signal`` 按该规则对齐到 ``asset_returns`` 的日历后
-        再前向填充；否则认为 ``weights_signal`` 的每一行即调仓日。
-    daily_amount
-        P2-9: 可选，与 asset_returns 同行同列的 amount_20d 宽表，
-        用于分层冲击成本（TieredImpactConfig）。缺省时回退到固定 vwap 参数。
-
-    Notes
-    -----
-    组合日收益：``r_{p,t} = w_{t-1}^T r_t``（前一日权重 × 当日资产收益），首日为 0。
-
-    - **close_to_close**（默认）：``r_t`` 为当日收盘相对昨收的收益；基础约定为 ``w_{t-1}^T r_t``。若 ``execution_lag>0``，则改为 ``w_{t-1-L}^T r_t``（``L`` 为滞后天数），用于避免「收盘可得信号却按收盘成交」的不可实现假设。
-    - **tplus1_open**：``r_t`` 须为 ``open(t+1)/open(t)-1``（见 ``build_open_to_open_returns``），与「T+1 最早次日开盘卖」一致，避免用日内 T+0 夸大夏普；收益矩阵末行可为 ``nan``（无下一开盘），将按 0 处理。此模式下忽略 ``execution_lag``。
-    - **vwap**：``r_t`` 仍使用 close-to-close 收益，但在调仓日额外扣减与换手相关的 VWAP 执行冲击，降低尾盘成交过于乐观的偏差；可与 ``execution_lag`` 同用。若启用分层冲击（use_tiered_impact=True），按各股票 amount_20d 分档使用独立 slippage/impact 参数。
-
-    成本：在**发生调仓**的交易日，按相对上一有效权重的 half L1 换手，用 ``turnover_cost_drag`` 从当日收益中扣减。
-    默认参数（commission_buy=2.5bps, commission_sell=2.5bps, slippage=2.0bps/side, stamp_duty=5.0bps）合计约 14 bps 双边，
-    如需对齐「双边千分之二（20bps）」的保守假设，可将 ``slippage_bps_per_side`` 调为 4~5 bps，
-    或在配置中将 ``transaction_costs.slippage_bps_per_side`` 设为 4.5。
-
-    涨停买入失败（仅 ``tplus1_open`` 模式）：
-    - 若 ``BacktestConfig.limit_up_open_mask`` 提供真实 open/pre_close mask，只冻结新增/增持权重；
-      已有持仓继续按 open-to-open 收益持有。
-    - ``limit_up_mode="idle"``：冻结的新增资金闲置。
-    - ``limit_up_mode="redistribute"``：将冻结的新增资金按可买标的当前权重比例重分配。
-    """
+    """Evaluate precomputed daily returns with forward-filled long-only weights."""
+    del daily_amount
     cfg = config or BacktestConfig()
-    rebalance = rebalance_rule if rebalance_rule is not None else cfg.rebalance_rule
-    cost = cfg.cost_params
     exe = str(cfg.execution_mode).lower().strip()
-    if exe not in ("close_to_close", "tplus1_open", "vwap"):
-        raise ValueError("execution_mode 须为 close_to_close、tplus1_open 或 vwap")
-    lag = int(cfg.execution_lag)
-    if lag < 0:
-        raise ValueError("execution_lag 须 >= 0")
-    if exe == "tplus1_open":
-        lag = 0
+    if exe not in ("close_to_close", "tplus1_open"):
+        raise ValueError("execution_mode must be close_to_close or tplus1_open")
+    lag = 0 if exe == "tplus1_open" else max(0, int(cfg.execution_lag))
+
     ar = asset_returns.sort_index().copy()
     ar.index = pd.to_datetime(ar.index).normalize()
-    sym_cols = [c for c in ar.columns]
-
+    ar = ar.astype(np.float64)
     ws = weights_signal.sort_index().copy()
     ws.index = pd.to_datetime(ws.index).normalize()
-    ws = _align_weights_columns(ws, sym_cols)
+    ws = _align_weights_columns(ws, list(ar.columns))
 
-    if rebalance is not None and rebalance:
-        rs = ws.resample(rebalance).last().dropna(how="all")
-        rs = rs[rs.index.isin(ar.index)]
-        ws = rs
+    rule = rebalance_rule if rebalance_rule is not None else cfg.rebalance_rule
+    if rule:
+        ws = ws.resample(rule).last().dropna(how="all")
+        ws = ws[ws.index.isin(ar.index)]
 
-    trading_index = ar.index
-    daily_w = build_daily_weights(
-        trading_index,
-        ws,
-        max_gross_exposure=cfg.max_gross_exposure,
-    )
-
-    r_mat = ar.to_numpy(dtype=np.float64)
-    if exe == "tplus1_open":
-        r_mat = np.where(np.isfinite(r_mat), r_mat, 0.0)
+    daily_w = build_daily_weights(ar.index, ws, max_gross_exposure=cfg.max_gross_exposure)
+    r_mat = ar.fillna(0.0).to_numpy(dtype=np.float64)
     w_mat = daily_w.to_numpy(dtype=np.float64)
-    n, k = r_mat.shape
-    if w_mat.shape != (n, k):
-        raise ValueError("内部权重矩阵与收益矩阵形状不一致")
-
-    # P2-9: 分层冲击成本 — 准备 amount_20d 矩阵
-    amount_mat: np.ndarray | None = None
-    tiered_bps: np.ndarray | None = None
-    if cfg.use_tiered_impact and cfg.tiered_impact is not None and daily_amount is not None:
-        amt = daily_amount.copy()
-        amt.index = pd.to_datetime(amt.index).normalize()
-        amt = amt.reindex(index=trading_index, columns=sym_cols, fill_value=np.nan)
-        amount_mat = amt.to_numpy(dtype=np.float64)
-        # 预计算每只股票的 (slippage_bps, impact_bps)，按 amount_20d 中位数分档
-        tiered_bps = np.zeros((k, 2), dtype=np.float64)
-        for s in range(k):
-            col_amt = amount_mat[:, s]
-            median_amt = float(np.nanmedian(col_amt)) if np.any(np.isfinite(col_amt)) else 0.0
-            slip, imp = cfg.tiered_impact.get_params(median_amt)
-            tiered_bps[s, 0] = slip
-            tiered_bps[s, 1] = imp
-
-    limit_up_mode = str(cfg.limit_up_mode).lower().strip()
-    if limit_up_mode not in ("idle", "redistribute"):
-        limit_up_mode = "idle"
-    limit_mask_mat: np.ndarray | None = None
-    limit_detection = "disabled_no_mask"
-    if exe == "tplus1_open" and cfg.limit_up_open_mask is not None:
-        lm = cfg.limit_up_open_mask.copy()
-        lm.index = pd.to_datetime(lm.index).normalize()
-        lm = lm.reindex(index=trading_index, columns=sym_cols, fill_value=False).fillna(False)
-        limit_mask_mat = lm.to_numpy(dtype=bool)
-        limit_detection = "open_preclose_mask"
-
+    n = len(ar)
     port = np.zeros(n, dtype=np.float64)
-    turn_series = np.full(n, np.nan, dtype=np.float64)
-    rebalance_dates = ws.index.intersection(trading_index)
-    buy_fail_rows: list[dict[str, Any]] = []
+    turn = np.full(n, np.nan, dtype=np.float64)
 
-    # P2-9: 冲击成本按市值分档累计（仅 vwap 模式）
-    impact_by_tier: dict[str, float] = {"large": 0.0, "mid": 0.0, "small": 0.0}
-    impact_tier_used = cfg.use_tiered_impact and exe == "vwap" and tiered_bps is not None
+    for i in range(1, n):
+        j = i - 1 - lag
+        if j >= 0:
+            port[i] = float(np.dot(w_mat[j], r_mat[i]))
+        half_l1 = 0.5 * float(np.sum(np.abs(w_mat[i] - w_mat[i - 1])))
+        if half_l1 > 1e-15:
+            turn[i] = half_l1
+            if cfg.cost_params is not None:
+                port[i] -= turnover_cost_drag(half_l1, cfg.cost_params)
 
-    # r_{p,t} = w_{t-1-L}^T r_t（L=execution_lag；tplus1_open 固定 L=0）
-    port[0] = 0.0
-    if exe == "tplus1_open" and limit_mask_mat is not None:
-        actual_prev = np.zeros(k, dtype=np.float64)
-        for i in range(1, n):
-            jw = i - 1
-            target_w = w_mat[jw].copy()
-            r_today = r_mat[i]
-            lim_mask = limit_mask_mat[i]
-            w_effective, failed_delta, failed_total, redistributed_total, idle_total = _apply_limit_up_buy_fail(
-                target_w,
-                actual_prev,
-                lim_mask,
-                mode=limit_up_mode,
-            )
-            if failed_total > 1e-15:
-                redistributed_ratio = redistributed_total / failed_total if failed_total > 1e-15 else 0.0
-                for col_idx in np.flatnonzero(failed_delta > 1e-15):
-                    failed_weight = float(failed_delta[col_idx])
-                    redistributed_weight = failed_weight * redistributed_ratio
-                    buy_fail_rows.append(
-                        {
-                            "trade_date": trading_index[i],
-                            "signal_weight_date": trading_index[jw],
-                            "symbol": sym_cols[col_idx],
-                            "mode": limit_up_mode,
-                            "target_weight": float(target_w[col_idx]),
-                            "prior_weight": float(actual_prev[col_idx]),
-                            "failed_weight": failed_weight,
-                            "redistributed_weight": float(redistributed_weight),
-                            "idle_weight": float(failed_weight - redistributed_weight),
-                            "rebalance_failed_total_weight": float(failed_total),
-                            "rebalance_redistributed_total_weight": float(redistributed_total),
-                            "rebalance_idle_total_weight": float(idle_total),
-                            "effective_weight": float(w_effective[col_idx]),
-                        }
-                    )
-
-            port[i] = float(np.dot(w_effective, r_today))
-            half_l1 = 0.5 * float(np.sum(np.abs(w_effective - actual_prev)))
-            if half_l1 > 1e-15:
-                turn_series[i] = half_l1
-                if cost is not None:
-                    port[i] -= turnover_cost_drag(half_l1, cost)
-            actual_prev = w_effective
-    else:
-        for i in range(1, n):
-            jw = i - 1 - lag
-            if jw < 0:
-                port[i] = 0.0
-            else:
-                w_prev = w_mat[jw].copy()
-                r_today = r_mat[i]
-                port[i] = float(np.dot(w_prev, r_today))
-
-            w_new = w_mat[i]
-            w_old = w_mat[i - 1]
-            half_l1 = 0.5 * float(np.sum(np.abs(w_new - w_old)))
-            if half_l1 > 1e-15:
-                turn_series[i] = half_l1
-                if cost is not None:
-                    port[i] -= turnover_cost_drag(half_l1, cost)
-                if exe == "vwap":
-                    # P2-9: 分层冲击成本 — 按各股票 amount_20d 分档计算 per-stock drag
-                    if impact_tier_used:
-                        dw = np.abs(w_new - w_old)
-                        half_l1_per_stock = 0.5 * dw
-                        slip_vec = tiered_bps[:, 0]
-                        imp_vec = tiered_bps[:, 1]
-                        extra_drag_vec = half_l1_per_stock * (slip_vec + imp_vec * half_l1_per_stock) / 1e4
-                        extra_drag = float(np.sum(extra_drag_vec))
-                        # 分解到三档
-                        for s in range(k):
-                            amt_s = float(amount_mat[i, s]) if amount_mat is not None and np.isfinite(amount_mat[i, s]) else 0.0
-                            tier = _amount_tier_label(amt_s, cfg.tiered_impact)
-                            impact_by_tier[tier] += float(extra_drag_vec[s])
-                    else:
-                        base_bps = max(float(cfg.vwap_slippage_bps_per_side), 0.0)
-                        impact_bps = max(float(cfg.vwap_impact_bps), 0.0)
-                        extra_drag = half_l1 * (base_bps + impact_bps * half_l1) / 1e4
-                    port[i] -= float(extra_drag)
-
-    s = pd.Series(port, index=trading_index, name="portfolio_ret")
-    turn = pd.Series(turn_series, index=trading_index, name="turnover_half_l1")
-
+    s = pd.Series(port, index=ar.index, name="strategy_ret")
+    turnover = pd.Series(turn, index=ar.index, name="turnover_half_l1")
     panel = compute_performance_panel(
         s.to_numpy(dtype=np.float64),
-        turnover=turn.to_numpy(dtype=np.float64),
+        turnover=turnover.to_numpy(dtype=np.float64),
         risk_free_daily=cfg.risk_free_daily,
         periods_per_year=cfg.periods_per_year,
     )
-
-    meta = {
-        "n_rebalances": int(len(rebalance_dates)),
-        "symbols": sym_cols,
-        "risk_cfg_resolved": risk_config_from_mapping(cfg.risk_cfg),
-        "execution_mode": exe,
-        "execution_lag": int(lag),
-        "limit_up_mode": limit_up_mode,
-        "limit_up_detection": limit_detection,
-        "buy_fail_diagnostic": buy_fail_rows,
-        "buy_fail_event_count": int(len(buy_fail_rows)),
-        "buy_fail_total_weight": float(sum(row["failed_weight"] for row in buy_fail_rows)),
-        "buy_fail_redistributed_weight": float(sum(row["redistributed_weight"] for row in buy_fail_rows)),
-        "buy_fail_idle_weight": float(sum(row["idle_weight"] for row in buy_fail_rows)),
-        # P2-9: 分层冲击成本分解
-        "impact_tier_used": impact_tier_used,
-        "impact_cost_by_tier": dict(impact_by_tier),
-        "impact_cost_total": float(sum(impact_by_tier.values())),
-    }
-    return BacktestResult(daily_returns=s, rebalance_turnover=turn, panel=panel, meta=meta)
+    return BacktestResult(
+        daily_returns=s,
+        rebalance_turnover=turnover,
+        panel=panel,
+        meta={
+            "n_rebalances": int(len(ws.index.intersection(ar.index))),
+            "symbols": list(ar.columns),
+            "execution_mode": exe,
+            "execution_lag": lag,
+            "compatibility_engine": True,
+        },
+    )
 
 
 def result_to_dict(res: BacktestResult) -> Dict[str, Any]:
-    """便于落盘：序列化摘要。"""
     return {
         "panel": res.panel.to_dict(),
         "meta": res.meta,

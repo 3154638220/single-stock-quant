@@ -1,4 +1,4 @@
-"""组合风险指标：回撤、波动率、极端行情降杠杆/空仓规则。"""
+"""Risk metrics for strategy return series."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ def max_drawdown_from_returns(returns: np.ndarray) -> float:
     """
     简单收益序列上的最大回撤（非负）。
 
-    注意：此函数仅适用于非杠杆组合（收益 > -1.0 的常规多头策略）。
+    注意：此函数仅适用于非杠杆收益序列（收益 > -1.0 的常规多头策略）。
     若策略含杠杆，equity 可能为负，回撤计算需额外保护。
     """
     r = np.asarray(returns, dtype=np.float64).ravel()
