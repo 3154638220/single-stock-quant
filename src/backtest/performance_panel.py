@@ -302,6 +302,106 @@ def aggregate_panels(
     return agg
 
 
+def breakdown_by_regime(
+    strategy_returns: np.ndarray,
+    index_returns: np.ndarray | None = None,
+    *,
+    regime_lookback: int = 60,
+    bull_threshold: float = 0.10,
+    bear_threshold: float = -0.10,
+    periods_per_year: float = 252.0,
+) -> dict[str, Any]:
+    """Split strategy performance by market regime based on index rolling return.
+
+    Returns a dict with per-regime metrics suitable for display.
+    """
+    sr = np.asarray(strategy_returns, dtype=np.float64).ravel()
+    if index_returns is not None:
+        ir = np.asarray(index_returns, dtype=np.float64).ravel()
+        if len(ir) != len(sr):
+            ir = np.full(len(sr), np.nan)
+    else:
+        ir = np.full(len(sr), np.nan)
+    n = min(len(sr), len(ir))
+    if n < regime_lookback + 2:
+        return {"error": f"not enough data ({n} rows, need {regime_lookback + 2})"}
+
+    sr = sr[:n]
+    ir = ir[:n]
+
+    # Compute rolling 60-day return on index
+    cum_idx = np.cumprod(1.0 + np.nan_to_num(ir, nan=0.0))
+    regime = np.full(n, "ranging", dtype=object)
+    for i in range(regime_lookback, n):
+        roll_ret = cum_idx[i] / cum_idx[i - regime_lookback] - 1.0
+        if np.isfinite(roll_ret):
+            if roll_ret > bull_threshold:
+                regime[i] = "bull"
+            elif roll_ret < bear_threshold:
+                regime[i] = "bear"
+            else:
+                regime[i] = "ranging"
+
+    result: dict[str, Any] = {
+        "bull_threshold": bull_threshold,
+        "bear_threshold": bear_threshold,
+        "regime_lookback": regime_lookback,
+        "regimes": {},
+    }
+    for label in ("bull", "bear", "ranging"):
+        mask = regime == label
+        n_days = int(mask.sum())
+        if n_days < 2:
+            result["regimes"][label] = {
+                "n_days": n_days,
+                "strategy_annualized": float("nan"),
+                "index_annualized": float("nan"),
+                "excess_annualized": float("nan"),
+                "sharpe": float("nan"),
+            }
+            continue
+        sub_ret = sr[mask]
+        strat_ann = annualized_return_cagr(sub_ret, periods_per_year=periods_per_year)
+        idx_ann = annualized_return_cagr(ir[mask], periods_per_year=periods_per_year) if np.any(np.isfinite(ir[mask])) else float("nan")
+        excess = float(strat_ann - idx_ann) if np.isfinite(strat_ann) and np.isfinite(idx_ann) else float("nan")
+        sh = sharpe_ratio(sub_ret, periods_per_year=periods_per_year)
+        result["regimes"][label] = {
+            "n_days": n_days,
+            "strategy_annualized": strat_ann,
+            "index_annualized": idx_ann,
+            "excess_annualized": excess,
+            "sharpe": sh,
+        }
+    return result
+
+
+def bootstrap_sharpe_ci(
+    returns: np.ndarray,
+    *,
+    n_bootstrap: int = 1000,
+    ci: float = 0.90,
+    periods_per_year: float = 252.0,
+) -> tuple[float, float]:
+    """Bootstrap confidence interval for annualized Sharpe ratio.
+
+    Returns (lower, upper) at the given confidence level.
+    """
+    r = _finite_returns(returns)
+    if r.size < 2:
+        return float("nan"), float("nan")
+    n = r.size
+    sharpes = np.zeros(n_bootstrap, dtype=np.float64)
+    rng = np.random.default_rng(42)
+    for i in range(n_bootstrap):
+        idx = rng.integers(0, n, size=n)
+        sample = r[idx]
+        sharpes[i] = sharpe_ratio(sample, periods_per_year=periods_per_year)
+    tail = (1.0 - ci) / 2.0
+    lo = float(np.quantile(sharpes, tail))
+    hi = float(np.quantile(sharpes, 1.0 - tail))
+    return lo, hi
+
+
 def panel_from_mapping(m: Mapping[str, Any]) -> PerformancePanel:
     """从字典构造 PerformancePanel（便于序列化往返）。"""
     return PerformancePanel(

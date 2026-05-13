@@ -14,11 +14,15 @@ from src.backtest.performance_panel import aggregate_panels, compute_performance
 from src.backtest.single_stock import run_single_stock_backtest
 from src.indicators import DKTrendParams, TrendMode
 
-DEFAULT_PARAM_GRID: dict[str, list[int]] = {
+DEFAULT_PARAM_GRID: dict[str, list] = {
     "macd_fast": [8, 10, 12, 14],
     "macd_slow": [22, 26, 30],
     "macd_signal": [7, 9, 11],
+    "min_run_len": [1, 2, 3],
+    "stop_loss_pct": [0.05, 0.08, 0.10],
 }
+
+_BT_PARAM_KEYS = {"stop_loss_pct", "atr_stop_multiplier", "trailing_stop_pct"}
 
 
 def _param_combinations(grid: dict[str, list[Any]]) -> list[dict[str, Any]]:
@@ -41,11 +45,16 @@ def normalize_param_grid(raw: dict[str, Any] | None) -> dict[str, list[Any]]:
     return grid
 
 
-def _params_with(base: DKTrendParams, overrides: dict[str, Any], mode_value: str) -> DKTrendParams:
+def _params_with(base: DKTrendParams, overrides: dict[str, Any], mode_value: str) -> tuple[DKTrendParams, dict[str, Any]]:
     data = asdict(base)
-    data.update(overrides)
+    bt_kwargs: dict[str, Any] = {}
+    trend_overrides = dict(overrides)
+    for key in _BT_PARAM_KEYS:
+        if key in trend_overrides:
+            bt_kwargs[key] = trend_overrides.pop(key)
+    data.update(trend_overrides)
     data["mode"] = mode_value
-    return DKTrendParams.from_mapping(data)
+    return DKTrendParams.from_mapping(data), bt_kwargs
 
 
 def _stability(best_by_fold: list[dict[str, Any]]) -> dict[str, Any]:
@@ -85,6 +94,7 @@ def run_walk_forward_optimization(
     window: str = "rolling",
     cost_bps: float = 15.0,
     initial_capital: float = 100_000.0,
+    bt_kwargs: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run rolling or expanding WFO and return a JSON-serializable report."""
     code = str(symbol).strip().zfill(6)
@@ -101,6 +111,7 @@ def run_walk_forward_optimization(
     if not combos:
         raise ValueError("param_grid is empty")
 
+    base_bt = dict(bt_kwargs or {})
     panels = []
     oos_returns = []
     oos_panel_dicts = []
@@ -117,27 +128,33 @@ def run_walk_forward_optimization(
 
         best_params = combos[0]
         best_sharpe = -np.inf
+        best_bt: dict[str, Any] = {}
         for combo in combos:
-            params = _params_with(base, combo, mode_value)
+            params, combo_bt = _params_with(base, combo, mode_value)
+            bt = {**base_bt, **combo_bt}
             res = run_single_stock_backtest(
                 code,
                 train_df,
                 params,
                 cost_bps=cost_bps,
                 initial_capital=initial_capital,
+                **{k: v for k, v in bt.items() if k in ("stop_loss_pct", "trailing_stop_pct", "atr_stop_multiplier", "atr_stop_period")},
             )
             score = res.sharpe_ratio if np.isfinite(res.sharpe_ratio) else -np.inf
             if score > best_sharpe:
                 best_sharpe = float(score)
                 best_params = combo
+                best_bt = combo_bt
 
-        selected = _params_with(base, best_params, mode_value)
+        selected, sel_bt = _params_with(base, best_params, mode_value)
+        bt_final = {**base_bt, **best_bt}
         oos_res = run_single_stock_backtest(
             code,
             oos_df,
             selected,
             cost_bps=cost_bps,
             initial_capital=initial_capital,
+            **{k: v for k, v in bt_final.items() if k in ("stop_loss_pct", "trailing_stop_pct", "atr_stop_multiplier", "atr_stop_period")},
         )
         panel = compute_performance_panel(
             oos_res.daily_returns.to_numpy(dtype=np.float64),

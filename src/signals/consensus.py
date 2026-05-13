@@ -6,7 +6,7 @@ import pandas as pd
 
 from src.indicators import DKTrendParams, TrendMode, compute_dktrend
 
-from .generator import SignalRecord, apply_volume_confirmation
+from .generator import SignalRecord, apply_volume_confirmation, compute_signal_quality
 from .types import Position, Signal
 
 
@@ -66,15 +66,22 @@ def compute_consensus_trend(
     color = pd.Series("", index=out.index, dtype="object")
     color.loc[red_count >= threshold] = "red"
     color.loc[green_count >= threshold] = "green"
-    prev = color.shift(1)
+    run_len = _run_lengths(color)
+    min_run = max(int(params.min_run_len), 1)
     signal = pd.Series("", index=out.index, dtype="object")
-    signal.loc[(color == "red") & (prev != "red")] = "buy"
-    signal.loc[(color == "green") & (prev != "green")] = "sell"
+    if min_run <= 1:
+        prev = color.shift(1)
+        signal.loc[(color == "red") & (prev != "red")] = "buy"
+        signal.loc[(color == "green") & (prev != "green")] = "sell"
+    else:
+        prev_run_len = run_len.shift(1).fillna(0).astype("int64")
+        signal.loc[(color == "red") & (run_len >= min_run) & (prev_run_len < min_run)] = "buy"
+        signal.loc[(color == "green") & (run_len >= min_run) & (prev_run_len < min_run)] = "sell"
 
     out["dk_value"] = red_count - green_count
     out["dk_color"] = color
     out["dk_signal"] = signal
-    out["dk_run_len"] = _run_lengths(color)
+    out["dk_run_len"] = run_len
     out["consensus_red_count"] = red_count.astype("int64")
     out["consensus_green_count"] = green_count.astype("int64")
     out["consensus_n_agree"] = threshold
@@ -104,9 +111,11 @@ def generate_consensus_signals(
         volume_lookback=volume_lookback,
         volume_ratio_min=volume_ratio_min,
     )
+    trend_reset = trend.reset_index(drop=True)
+    quality = compute_signal_quality(trend_reset).reset_index(drop=True)
     records: list[SignalRecord] = []
     position = Position.FLAT
-    for idx, row in trend.iterrows():
+    for pos_idx, row in trend_reset.iterrows():
         color = str(row.get("dk_color", ""))
         if color not in ("red", "green"):
             continue
@@ -118,12 +127,13 @@ def generate_consensus_signals(
             position = Position.FLAT
         records.append(
             SignalRecord(
-                trade_date=pd.Timestamp(row.get("trade_date", idx)).normalize(),
+                trade_date=pd.Timestamp(row.get("trade_date", row.name)).normalize(),
                 signal=sig,
                 close=float(row["close"]),
                 dk_color=color,
                 dk_run_len=int(row["dk_run_len"]),
                 position_after=position,
+                quality_score=float(quality.iloc[pos_idx]) if sig == Signal.BUY else 0.0,
             )
         )
     return records

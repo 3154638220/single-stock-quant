@@ -15,6 +15,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.backtest.single_stock import run_single_stock_backtest
+from src.backtest.transaction_costs import TransactionCostParams, transaction_cost_params_from_mapping
 from src.data_fetcher.db_manager import DuckDBManager
 from src.data_fetcher.stock_name_cache import resolve_stock_name_cache_path, resolve_stock_names
 from src.indicators import DKTrendParams, TrendMode
@@ -56,7 +57,7 @@ def _print_result(res, mode: str) -> None:
     print("交易统计：")
     print(f"  总交易次数：{res.n_trades}    胜率：{_pct(res.win_rate)}    平均持仓天数：{_num(res.avg_hold_days, 1)}")
     print(f"  单笔平均收益：{_signed_pct(res.avg_return_per_trade)}    最大连续盈利：{res.max_consecutive_wins}    最大连续亏损：{res.max_consecutive_losses}")
-    print(f"  固定止损：{res.stop_loss_exits}    追踪止损：{res.trailing_stop_exits}")
+    print(f"  固定止损：{res.stop_loss_exits}    追踪止损：{res.trailing_stop_exits}    ATR止损：{res.atr_stop_exits}")
     if not res.trade_log.empty:
         print()
         print("交易记录（最近 5 笔）：")
@@ -75,8 +76,10 @@ def _bt_kwargs(cfg: dict, *, index_ohlcv: pd.DataFrame | None = None) -> dict:
     risk_cfg = cfg.get("risk", {}) or {}
     trend_cfg = cfg.get("trend_signal", {}) or {}
     consensus_n = trend_cfg.get("consensus_n_agree")
-    return {
+    tc_cfg = bt_cfg.get("transaction_cost", {}) or {}
+    kwargs: dict = {
         "cost_bps": float(bt_cfg.get("cost_bps", 15.0)),
+        "cost_params": transaction_cost_params_from_mapping(tc_cfg) if tc_cfg else None,
         "initial_capital": float(bt_cfg.get("initial_capital", 100000)),
         "volume_confirm": bool(filt_cfg.get("volume_confirm", False)),
         "volume_lookback": int(filt_cfg.get("volume_lookback", 20)),
@@ -90,7 +93,15 @@ def _bt_kwargs(cfg: dict, *, index_ohlcv: pd.DataFrame | None = None) -> dict:
         "risk_off_factor": float(risk_cfg.get("risk_off_factor", 0.0)),
         "stop_loss_pct": float(bt_cfg.get("stop_loss_pct", 0.0)),
         "trailing_stop_pct": float(bt_cfg.get("trailing_stop_pct", 0.0)),
+        "atr_stop_multiplier": float(bt_cfg.get("atr_stop_multiplier", 0.0)),
+        "atr_stop_period": int(bt_cfg.get("atr_stop_period", 14)),
+        "risk_per_trade_pct": float(bt_cfg.get("risk_per_trade_pct", 0.0)),
+        "position_size_cap": float(bt_cfg.get("position_size_cap", 1.0)),
+        "stop_reentry_enabled": bool(bt_cfg.get("stop_reentry_enabled", False)),
+        "stop_reentry_cooldown": int(bt_cfg.get("stop_reentry_cooldown", 3)),
+        "stop_reentry_min_run": int(bt_cfg.get("stop_reentry_min_run", 2)),
     }
+    return kwargs
 
 
 def _stop_comparison_rows(symbol: str, df: pd.DataFrame, params: DKTrendParams, base_kwargs: dict, stock_name: str) -> list[dict]:
@@ -133,7 +144,11 @@ def main() -> int:
     parser.add_argument("--consensus", action="store_true", help="Use multi-mode consensus instead of one DK mode")
     parser.add_argument("--compare-modes", action="store_true")
     parser.add_argument("--compare-stops", action="store_true")
+    parser.add_argument("--compare-costs", action="store_true")
     parser.add_argument("--export-trades", action="store_true")
+    parser.add_argument("--export-html", action="store_true")
+    parser.add_argument("--permutation-test", action="store_true")
+    parser.add_argument("--n-permutations", type=int, default=500)
     parser.add_argument("--config", help="Config file path")
     parser.add_argument("--duckdb-path", help="Override DuckDB path, e.g. /path/to/market.duckdb")
     parser.add_argument("--stock-name-cache", help="Override stock name CSV path")
@@ -210,13 +225,75 @@ def main() -> int:
         mode, res = results[0]
         _print_result(res, mode)
 
-    if args.export_trades:
+    if args.export_trades or args.export_html:
         out_dir = project_root() / str(cfg.get("paths", {}).get("output_dir", "data/output"))
         out_dir.mkdir(parents=True, exist_ok=True)
-        for mode, res in results:
+        mode, res = results[0]
+        if args.export_trades:
             path = out_dir / f"{symbol}_{mode}_trades.csv"
             res.trade_log.to_csv(path, index=False)
             print(f"已写入 {path}")
+        if args.export_html:
+            from src.backtest.report import generate_html_report
+            path = out_dir / f"{symbol}_backtest_{datetime.now().strftime('%Y%m%d')}.html"
+            generate_html_report(res, df, index_ohlcv=index_df, output_path=path)
+            print(f"已写入 {path}")
+
+    if args.permutation_test:
+        from src.backtest.permutation_test import run_permutation_test
+        mode, res = results[0]
+        pt_result = run_permutation_test(
+            symbol, df, _params(cfg, mode),
+            n_permutations=args.n_permutations, **base_kwargs,
+        )
+        print(f"\n置换检验 (n={pt_result.n_permutations}):")
+        print(f"  观测 Sharpe: {pt_result.observed_sharpe:.3f}")
+        print(f"  零分布均值: {pt_result.null_sharpe_mean:.3f}  (95%分位: {pt_result.null_sharpe_p95:.3f})")
+        print(f"  p-value: {pt_result.p_value:.4f}  {'✅ 显著' if pt_result.is_significant else '⚠️ 未通过显著性检验，策略可能为噪声拟合'}")
+
+    if args.compare_costs:
+        from src.backtest.transaction_costs import TransactionCostParams
+        out_dir = project_root() / str(cfg.get("paths", {}).get("output_dir", "data/output"))
+        out_dir.mkdir(parents=True, exist_ok=True)
+        cost_scenarios = [
+            ("零成本（上界）", None),
+            ("对称15bps", 15.0),
+            ("真实A股", TransactionCostParams(commission_buy_bps=2.5, commission_sell_bps=2.5, slippage_bps_per_side=2.0, stamp_duty_sell_bps=5.0)),
+            ("高成本（机构）", TransactionCostParams(commission_buy_bps=10, commission_sell_bps=10, slippage_bps_per_side=5.0, stamp_duty_sell_bps=5.0)),
+        ]
+        rows = []
+        mode = results[0][0] if isinstance(results[0], tuple) else selected_mode
+        for label, cost_spec in cost_scenarios:
+            kwargs = dict(base_kwargs)
+            kwargs["stock_name"] = stock_name
+            if cost_spec is None:
+                kwargs["cost_bps"] = 0.0
+                kwargs["cost_params"] = None
+                buy_bps = sell_bps = 0.0
+            elif isinstance(cost_spec, TransactionCostParams):
+                kwargs["cost_params"] = cost_spec
+                buy_bps = cost_spec.buy_fraction() * 1e4
+                sell_bps = cost_spec.sell_fraction() * 1e4
+            else:
+                kwargs["cost_bps"] = float(cost_spec)
+                kwargs["cost_params"] = None
+                buy_bps = sell_bps = float(cost_spec)
+            res2 = run_single_stock_backtest(symbol, df, _params(cfg, mode), **kwargs)
+            total_cost = buy_bps + sell_bps
+            rows.append({
+                "model": label, "buy_bps": buy_bps, "sell_bps": sell_bps,
+                "ann_return": res2.annualized_return, "sharpe": res2.sharpe_ratio,
+                "n_trades": res2.n_trades, "total_cost_bps": total_cost * res2.n_trades,
+            })
+        print(f"\n{stock_name} ({symbol}) 成本敏感性分析")
+        print(f"{'成本模型':<16} {'买方bps':>8} {'卖方bps':>8} {'年化收益':>9} {'Sharpe':>7} {'交易数':>6}")
+        for row in rows:
+            print(f"{row['model']:<16} {row['buy_bps']:>8.1f} {row['sell_bps']:>8.1f} {_signed_pct(row['ann_return']):>9} {row['sharpe']:>7.2f} {row['n_trades']:>6}")
+        table = pd.DataFrame(rows)
+        path = out_dir / f"{symbol}_cost_compare_{datetime.now().strftime('%Y%m%d')}.csv"
+        table.to_csv(path, index=False)
+        print(f"已写入 {path}")
+
     return 0
 
 

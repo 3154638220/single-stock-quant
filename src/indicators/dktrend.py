@@ -27,6 +27,7 @@ class DKTrendParams:
     ma_slow: int = 20
     ma_smooth: int = 3
     boll_window: int = 20
+    min_run_len: int = 1
 
     @classmethod
     def from_mapping(cls, data: dict | None) -> "DKTrendParams":
@@ -41,6 +42,7 @@ class DKTrendParams:
             ma_slow=int(d.get("ma_slow", 20)),
             ma_smooth=int(d.get("ma_smooth", 3)),
             boll_window=int(d.get("boll_window", 20)),
+            min_run_len=int(d.get("min_run_len", 1)),
         )
 
 
@@ -120,13 +122,20 @@ def compute_dktrend(df: pd.DataFrame, params: DKTrendParams | None = None) -> pd
     color.loc[valid & (value > 0)] = "red"
     color.loc[valid & (value <= 0)] = "green"
 
+    run_len = _run_lengths(color)
     prev_color = color.shift(1)
+    min_run = max(int(p.min_run_len), 1)
     signal = pd.Series("", index=out.index, dtype="object")
-    signal.loc[(color == "red") & (prev_color == "green")] = "buy"
-    signal.loc[(color == "green") & (prev_color == "red")] = "sell"
+    if min_run <= 1:
+        signal.loc[(color == "red") & (prev_color == "green")] = "buy"
+        signal.loc[(color == "green") & (prev_color == "red")] = "sell"
+    else:
+        prev_run_len = run_len.shift(1).fillna(0).astype("int64")
+        signal.loc[(color == "red") & (run_len >= min_run) & (prev_run_len < min_run)] = "buy"
+        signal.loc[(color == "green") & (run_len >= min_run) & (prev_run_len < min_run)] = "sell"
 
     out["dk_value"] = value.astype(float)
     out["dk_color"] = color
     out["dk_signal"] = signal
-    out["dk_run_len"] = _run_lengths(color)
+    out["dk_run_len"] = run_len
     return out.replace({np.nan: np.nan})

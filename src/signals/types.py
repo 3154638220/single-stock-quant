@@ -14,3 +14,9 @@ class Signal(str, Enum):
 class Position(str, Enum):
     LONG = "long"
     FLAT = "flat"
+
+
+class SignalQuality(str, Enum):
+    WEAK = "weak"
+    FAIR = "fair"
+    STRONG = "strong"

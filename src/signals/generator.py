@@ -21,6 +21,7 @@ class SignalRecord:
     dk_color: str
     dk_run_len: int
     position_after: Position
+    quality_score: float = 0.0
 
 
 def _signal_from_raw(raw: str) -> Signal:
@@ -76,6 +77,63 @@ def apply_volume_confirmation(
     return out
 
 
+def compute_signal_quality(
+    trend: pd.DataFrame,
+    *,
+    volume_ratio_min: float = 1.5,
+    volume_lookback: int = 20,
+    atr_lookback: int = 60,
+    market_returns: pd.Series | None = None,
+    market_lookback: int = 10,
+) -> pd.Series:
+    """Score each BUY signal (0-100) based on confirming evidence.
+
+    Points:
+    - +20: color run_len >= 2
+    - +20: volume >= volume_ratio_min * avg volume
+    - +20: resonance count == 3 (if available)
+    - +20: market return > 0 over market_lookback
+    - +20: current ATR < median ATR over atr_lookback
+    """
+    scores = pd.Series(0.0, index=trend.index, dtype="float64")
+    buy_mask = trend["dk_signal"] == "buy"
+
+    # run_len >= 2
+    run_len = trend.get("dk_run_len", pd.Series(0, index=trend.index))
+    scores.loc[buy_mask & (run_len >= 2)] += 20
+
+    # volume confirmation
+    if "volume" in trend.columns:
+        vol = pd.to_numeric(trend["volume"], errors="coerce")
+        avg_vol = vol.rolling(volume_lookback, min_periods=volume_lookback).mean()
+        scores.loc[buy_mask & (vol >= avg_vol * volume_ratio_min)] += 20
+
+    # resonance
+    if "consensus_red_count" in trend.columns:
+        scores.loc[buy_mask & (trend["consensus_red_count"] >= 3)] += 20
+
+    # market regime
+    if market_returns is not None and not market_returns.empty:
+        aligned = market_returns.reindex(trend.index).fillna(0.0)
+        market_cum = (1.0 + aligned).rolling(market_lookback, min_periods=market_lookback).apply(
+            lambda x: (x + 1.0).prod() - 1.0, raw=True
+        )
+        scores.loc[buy_mask & (market_cum > 0)] += 20
+
+    # low-volatility entry (ATR below median)
+    if all(c in trend.columns for c in ("high", "low", "close")):
+        high = pd.to_numeric(trend["high"], errors="coerce")
+        low = pd.to_numeric(trend["low"], errors="coerce")
+        close = pd.to_numeric(trend["close"], errors="coerce")
+        prev_close = close.shift(1)
+        tr = pd.concat([high - low, (high - prev_close).abs(), (low - prev_close).abs()], axis=1).max(axis=1)
+        atr = tr.rolling(14, min_periods=14).mean()
+        atr_median = atr.rolling(atr_lookback, min_periods=atr_lookback).median()
+        scores.loc[buy_mask & (atr < atr_median)] += 20
+
+    return scores.clip(upper=100.0)
+
+
 def generate_signals(
     ohlcv: pd.DataFrame,
     params: DKTrendParams | None = None,
@@ -92,9 +150,11 @@ def generate_signals(
         lookback=volume_lookback,
         volume_ratio_min=volume_ratio_min,
     )
+    trend_reset = trend.reset_index(drop=True)
+    quality = compute_signal_quality(trend_reset).reset_index(drop=True)
     records: list[SignalRecord] = []
     position = Position.FLAT
-    for idx, row in trend.iterrows():
+    for pos_idx, row in trend_reset.iterrows():
         color = str(row.get("dk_color", ""))
         if color not in ("red", "green"):
             continue
@@ -105,12 +165,13 @@ def generate_signals(
             position = Position.FLAT
         records.append(
             SignalRecord(
-                trade_date=pd.Timestamp(row.get("trade_date", idx)).normalize(),
+                trade_date=pd.Timestamp(row.get("trade_date", row.name)).normalize(),
                 signal=sig,
                 close=float(row["close"]),
                 dk_color=color,
                 dk_run_len=int(row["dk_run_len"]),
                 position_after=position,
+                quality_score=float(quality.iloc[pos_idx]) if sig == Signal.BUY else 0.0,
             )
         )
     return records
