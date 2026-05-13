@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import subprocess
-import sys
-import time
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import pandas as pd
+
+from src.settings import project_root
 
 
 def _name_column(df: pd.DataFrame) -> pd.Series:
@@ -50,46 +50,32 @@ def load_stock_name_cache(path: Path) -> pd.DataFrame:
     return _normalize_name_cache(pd.read_csv(path, dtype=str))
 
 
-def ensure_stock_name_cache(
-    cache_path: Path,
-    *,
-    force: bool = False,
-    max_age_days: int = 30,
-    config_path: Optional[str] = None,
-    project_root: Optional[Path] = None,
-) -> None:
-    """自动维护股票名称缓存，超期或缺失时拉取 fetch_stock_names.py。"""
-    need_fetch = force
-    if not need_fetch and cache_path.exists():
-        age_sec = time.time() - cache_path.stat().st_mtime
-        if age_sec > max_age_days * 86400:
-            print(f"[m7] 股票名称缓存已过期 ({age_sec / 86400:.0f}d)，自动刷新...")
-            need_fetch = True
-    if not need_fetch and not cache_path.exists():
-        print("[m7] 股票名称缓存不存在，自动拉取...")
-        need_fetch = True
+def resolve_stock_name_cache_path(cfg: dict[str, Any]) -> Path:
+    """Return the configured local stock-name cache path."""
+    raw = str((cfg.get("paths", {}) or {}).get("stock_name_cache", "data/stock_names.csv")).strip()
+    path = Path(raw or "data/stock_names.csv").expanduser()
+    if path.is_absolute():
+        return path
+    return project_root() / path
 
-    if not need_fetch:
-        print(f"[m7] 股票名称缓存有效: {cache_path} (年龄={max(0, (time.time() - cache_path.stat().st_mtime)) / 86400:.0f}d)")
-        return
 
-    root = project_root or cache_path.parent.parent
-    fetch_script = root / "scripts" / "fetch_stock_names.py"
-    cmd = [
-        sys.executable, str(fetch_script),
-        "--out", str(cache_path),
-        "--timeout-sec", "90",
-    ]
-    if config_path:
-        cmd.extend(["--config", config_path])
-    print(f"[m7] 执行: {' '.join(cmd)}")
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        print(f"[m7] 警告: 股票名称拉取失败 (exit={result.returncode})")
-        if result.stderr.strip():
-            print(f"[m7] stderr: {result.stderr.strip()[-500:]}")
-    else:
-        print(f"[m7] 股票名称缓存已更新: {cache_path}")
+def load_stock_name_map(path: Path) -> dict[str, str]:
+    """Load ``symbol -> name`` from a local CSV cache."""
+    names = load_stock_name_cache(path)
+    if names.empty:
+        return {}
+    return dict(zip(names["symbol"].astype(str), names["name"].astype(str)))
+
+
+def resolve_stock_names(symbols: Iterable[Any], cache_path: Path) -> dict[str, str]:
+    """Resolve display names for symbols, falling back to the normalized symbol."""
+    cache = load_stock_name_map(cache_path)
+    out: dict[str, str] = {}
+    for item in symbols:
+        code = _display_symbol(item)
+        name = str(cache.get(code, "")).strip()
+        out[code] = name if name else code
+    return out
 
 
 def attach_stock_names(dataset: pd.DataFrame, names: pd.DataFrame) -> pd.DataFrame:

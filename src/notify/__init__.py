@@ -1,7 +1,4 @@
-"""外部通知渠道集成：企业微信 Webhook、钉钉等。
-
-P2-8: 提供告警回调 handler 示例实现，供 ICMonitor 等组件注册使用。
-"""
+"""外部通知渠道集成：企业微信 Webhook 等。"""
 
 from __future__ import annotations
 
@@ -17,10 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 class WecomWebhookHandler:
-    """P2-8: 企业微信机器人 Webhook 告警处理器。
-
-    Send markdown or text messages through a WeCom group robot.
-    """
+    """企业微信机器人 Webhook 告警处理器。"""
 
     def __init__(self, url: str, *, timeout: float = 10.0, mention_all: bool = False) -> None:
         """
@@ -38,16 +32,7 @@ class WecomWebhookHandler:
         self.mention_all = bool(mention_all)
 
     def __call__(self, alert: object) -> bool:
-        """发送单条告警消息到企业微信。
-
-        Parameters
-        ----------
-        alert : ICDecayAlert 或任何实现了 __str__ 的对象
-
-        Returns
-        -------
-        bool : 发送是否成功
-        """
+        """发送单条告警消息到企业微信。"""
         message = str(alert)
         return self.send_markdown(message)
 

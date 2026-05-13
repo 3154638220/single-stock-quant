@@ -13,6 +13,7 @@ if str(ROOT) not in sys.path:
 
 from src.backtest.single_stock import run_single_stock_backtest
 from src.data_fetcher.db_manager import DuckDBManager
+from src.data_fetcher.stock_name_cache import resolve_stock_name_cache_path, resolve_stock_names
 from src.indicators import DKTrendParams, TrendMode
 from src.settings import load_config, project_root
 
@@ -57,6 +58,7 @@ def main() -> int:
     cfg = load_config(args.config)
     bt_cfg = cfg.get("backtest", {}) or {}
     symbol = str(args.symbol).strip().zfill(6)
+    stock_name = resolve_stock_names([symbol], resolve_stock_name_cache_path(cfg)).get(symbol, symbol)
     with DuckDBManager(config_path=args.config) as db:
         df = db.read_daily_frame(symbols=[symbol], start=args.start, end=args.end)
     if df.empty:
@@ -71,6 +73,7 @@ def main() -> int:
             _params(cfg, mode),
             cost_bps=float(bt_cfg.get("cost_bps", 15.0)),
             initial_capital=float(bt_cfg.get("initial_capital", 100000)),
+            stock_name=stock_name,
         )
         results.append((mode, res))
 

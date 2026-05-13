@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import logging
 import os
 from pathlib import Path
@@ -48,7 +49,7 @@ def load_config(config_path: Optional[Union[str, Path]] = None) -> Dict[str, Any
     if config_path is not None:
         path = resolve_config_path(config_path)
         with open(path, "r", encoding="utf-8") as f:
-            return yaml.safe_load(f) or {}
+            return _deep_merge(DEFAULT_CONFIG, yaml.safe_load(f) or {})
 
     root = project_root()
     candidates: list[Path] = []
@@ -64,9 +65,9 @@ def load_config(config_path: Optional[Union[str, Path]] = None) -> Dict[str, Any
     for path in candidates:
         if path.exists():
             with open(path, "r", encoding="utf-8") as f:
-                return yaml.safe_load(f) or {}
+                return _deep_merge(DEFAULT_CONFIG, yaml.safe_load(f) or {})
     _LOG.warning("未找到配置文件（config.yaml / config.yaml.example），使用代码内默认参数。")
-    return {}
+    return copy.deepcopy(DEFAULT_CONFIG)
 
 
 def resolve_asof_trade_end(paths: Optional[Dict[str, Any]] = None) -> pd.Timestamp:
@@ -94,19 +95,49 @@ def has_explicit_asof_trade_date(paths: Optional[Dict[str, Any]] = None) -> bool
 
 
 def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
-    """递归深合并：override 中的值完全覆盖 base 中对应键。
-
-    对于嵌套字典，整表替换（不逐键合并），确保 composite_extended 等配置节的
-    覆盖语义为"全量替换"而非"增量补丁"。
-    """
-    result = {**base}
+    """递归深合并配置，用户配置只覆盖显式给出的键。"""
+    result = copy.deepcopy(base)
     for key, value in override.items():
-        result[key] = value
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = _deep_merge(result[key], value)
+        else:
+            result[key] = copy.deepcopy(value)
     return result
 
 
 # 默认配置骨架。
 DEFAULT_CONFIG: Dict[str, Any] = {
+    "paths": {
+        "duckdb_path": "data/market.duckdb",
+        "output_dir": "data/output",
+        "logs_dir": "data/logs",
+        "stock_name_cache": "data/stock_names.csv",
+        "asof_trade_date": "",
+    },
+    "logging": {
+        "format": "text",
+    },
+    "akshare": {
+        "adjust": "qfq",
+        "sleep_between_symbols_sec": 0.5,
+        "max_fetch_retries": 3,
+        "retry_delay_sec": 2.0,
+        "request_timeout_sec": 10.0,
+        "fetch_workers": 2,
+        "daily_source_preference": "sina",
+        "daily_allow_fallback": True,
+    },
+    "database": {
+        "table_daily": "a_share_daily",
+        "table_audit": "data_fetch_audit",
+        "auto_backfill_derived_on_init": True,
+    },
+    "quality": {
+        "max_calendar_gap_days": 20,
+        "null_ratio_max": 0.05,
+        "fail_on_ohlc_invalid": True,
+        "fail_on_large_gaps": True,
+    },
     "trend_signal": {
         "mode": "macd_cross",
         "macd_fast": 12,
@@ -121,5 +152,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "cost_bps": 15.0,
         "initial_capital": 100000,
         "execution": "tplus1_open",
+    },
+    "notify": {
+        "wecom_webhook_url": "",
+        "mention_all": False,
     },
 }

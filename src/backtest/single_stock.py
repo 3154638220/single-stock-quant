@@ -9,7 +9,7 @@ import pandas as pd
 
 from src.backtest.performance_panel import compute_performance_panel
 from src.indicators import DKTrendParams, compute_dktrend
-from src.market.tradability import is_open_limit_up_unbuyable
+from src.market.tradability import is_open_limit_up_unbuyable, is_row_suspended_like
 
 
 @dataclass(frozen=True)
@@ -53,11 +53,27 @@ def _prepare_ohlcv(ohlcv: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _is_tradable_open(df: pd.DataFrame, idx: int) -> bool:
+    volume = float(df.loc[idx, "volume"]) if "volume" in df.columns else 1.0
+    open_px = float(df.loc[idx, "open"])
+    close_px = float(df.loc[idx, "close"])
+    return not is_row_suspended_like(volume, open_px, close_px)
+
+
 def _next_buy_index(df: pd.DataFrame, symbol: str, start_idx: int) -> int | None:
     for j in range(start_idx, len(df)):
+        if not _is_tradable_open(df, j):
+            continue
         prev_close = float(df.loc[j - 1, "close"]) if j > 0 else np.nan
         open_px = float(df.loc[j, "open"])
         if not is_open_limit_up_unbuyable(open_px, prev_close, symbol):
+            return j
+    return None
+
+
+def _next_sell_index(df: pd.DataFrame, start_idx: int) -> int | None:
+    for j in range(start_idx, len(df)):
+        if _is_tradable_open(df, j):
             return j
     return None
 
@@ -102,7 +118,9 @@ def run_single_stock_backtest(
             actions.setdefault(j, "buy")
             pending_buy_idx = j
         elif sig == "sell" and planned_long and i + 1 < len(df):
-            j = i + 1
+            j = _next_sell_index(df, i + 1)
+            if j is None:
+                continue
             actions.setdefault(j, "sell")
             planned_long = False
         elif sig == "sell" and pending_buy_idx is not None:

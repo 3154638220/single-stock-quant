@@ -1,15 +1,12 @@
 """
 A 股可交易性：涨跌停比例、次日开盘一字涨停（难以买入）、停牌近似。
 
-月度选股链路只在候选池和回测标签中使用这些规则，不在这里维护真实 T+1 仓位状态机。
+单股信号回测用这些规则处理 T+1 买入遇到一字涨停时的顺延。
 """
 
 from __future__ import annotations
 
-from typing import Tuple
-
 import numpy as np
-import pandas as pd
 
 
 def limit_up_ratio(symbol: str) -> float:
@@ -57,126 +54,3 @@ def is_row_suspended_like(
     if not np.isfinite(volume) or volume <= 0:
         return True
     return False
-
-
-def prefilter_stock_pool(
-    df: pd.DataFrame,
-    asof_date,
-    *,
-    symbol_col: str = "symbol",
-    date_col: str = "trade_date",
-    limit_move_lookback: int = 5,
-    limit_move_max: int = 2,
-    turnover_low_pct: float = 0.10,
-    turnover_high_pct: float = 0.98,
-    price_position_high_pct: float = 0.90,
-    price_position_lookback: int = 250,
-    log=None,
-) -> Tuple[list, dict]:
-    """
-    硬规则预过滤：在进入因子计算或打分前剔除高风险标的。
-
-    规则：
-    1. 剔除 ST / \\*ST（股票代码名称含 ST，需 name 列；无 name 列则跳过）。
-    2. 剔除过去 ``limit_move_lookback`` 天内发生 >= ``limit_move_max`` 次
-       涨停或跌停（|日收益| >= 对应板块限幅）的股票。
-    3. 剔除换手率长期处于市场后 ``turnover_low_pct`` 或前 ``1 - turnover_high_pct``
-       的标的。
-    4. 剔除当前价格处于过去 ``price_position_lookback`` 天区间
-       ``price_position_high_pct`` 分位以上的绝对高位股。
-
-    Returns
-    -------
-    kept_symbols : list
-        通过过滤的标的代码列表。
-    stats : dict
-        各规则剔除数量的统计。
-    """
-    if df.empty:
-        return [], {"total": 0}
-
-    asof_ts = pd.Timestamp(asof_date).normalize()
-    df = df.copy()
-    df[date_col] = pd.to_datetime(df[date_col]).dt.normalize()
-    df[symbol_col] = df[symbol_col].astype(str).str.zfill(6)
-
-    all_syms = df[symbol_col].unique().tolist()
-    removed_st: set = set()
-    removed_limit: set = set()
-    removed_turnover: set = set()
-    removed_high: set = set()
-
-    if "name" in df.columns:
-        latest_names = df.sort_values(date_col).groupby(symbol_col)["name"].last()
-        for sym, name in latest_names.items():
-            if isinstance(name, str) and "ST" in name.upper():
-                removed_st.add(sym)
-
-    lookback_start = asof_ts - pd.offsets.BDay(limit_move_lookback + 5)
-    recent = df[(df[date_col] >= lookback_start) & (df[date_col] <= asof_ts)]
-
-    for sym, grp in recent.groupby(symbol_col, sort=False):
-        if sym in removed_st:
-            continue
-        grp = grp.sort_values(date_col)
-        if len(grp) < 2:
-            continue
-        closes = grp["close"].to_numpy(dtype=np.float64)
-        rets = closes[1:] / closes[:-1] - 1.0
-        tail = rets[-limit_move_lookback:] if len(rets) >= limit_move_lookback else rets
-        lim = limit_up_ratio(str(sym))
-        threshold = lim - 0.005
-        n_hits = int(np.sum(np.abs(tail) >= threshold))
-        if n_hits >= limit_move_max:
-            removed_limit.add(sym)
-
-    if "turnover" in recent.columns:
-        last_day = recent[recent[date_col] == asof_ts]
-        if not last_day.empty:
-            to_vals = pd.to_numeric(last_day["turnover"], errors="coerce")
-            lo = to_vals.quantile(turnover_low_pct)
-            hi = to_vals.quantile(turnover_high_pct)
-            for _, row in last_day.iterrows():
-                sym = row[symbol_col]
-                if sym in removed_st or sym in removed_limit:
-                    continue
-                tv = float(row.get("turnover", np.nan))
-                if np.isfinite(tv) and (tv < lo or tv > hi):
-                    removed_turnover.add(sym)
-
-    pp_start = asof_ts - pd.offsets.BDay(price_position_lookback + 20)
-    hist = df[(df[date_col] >= pp_start) & (df[date_col] <= asof_ts)]
-    for sym, grp in hist.groupby(symbol_col, sort=False):
-        if sym in removed_st or sym in removed_limit or sym in removed_turnover:
-            continue
-        closes = pd.to_numeric(grp["close"], errors="coerce").dropna()
-        if len(closes) < 20:
-            continue
-        current = closes.iloc[-1]
-        pct = float((closes < current).sum()) / len(closes)
-        if pct >= price_position_high_pct:
-            removed_high.add(sym)
-
-    all_removed = removed_st | removed_limit | removed_turnover | removed_high
-    kept = [s for s in all_syms if s not in all_removed]
-
-    stats = {
-        "total_before": len(all_syms),
-        "removed_st": len(removed_st),
-        "removed_limit_move": len(removed_limit),
-        "removed_turnover_extreme": len(removed_turnover),
-        "removed_absolute_high": len(removed_high),
-        "total_removed": len(all_removed),
-        "total_after": len(kept),
-    }
-    if log:
-        log.info(
-            "预过滤: ST=%d, 涨跌停=%d, 换手率=%d, 绝对高位=%d → 剩余 %d/%d",
-            stats["removed_st"],
-            stats["removed_limit_move"],
-            stats["removed_turnover_extreme"],
-            stats["removed_absolute_high"],
-            stats["total_after"],
-            stats["total_before"],
-        )
-    return kept, stats

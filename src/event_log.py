@@ -1,6 +1,6 @@
 """结构化事件日志（DuckDB run_events 表）。
 
-记录管线关键决策事件（涨停过滤、因子衰减、数据拉取失败等），
+记录系统关键决策事件（涨停过滤、信号触发、数据拉取失败等），
 支持后续 SQL 查询分析。
 
 用法::
@@ -10,8 +10,8 @@
     log_event(conn, "limit_up_filter", {
         "symbol": "600001",
         "signal_date": "2026-04-28",
-        "action": "removed_from_pool",
-    }, run_id="monthly_2026_04")
+        "action": "buy_delayed",
+    }, run_id="signal_20260428")
 
 表结构（由 src.data_fetcher.migrations v8 创建）::
 
@@ -42,16 +42,11 @@ _LOG = logging.getLogger(__name__)
 class EventType:
     """常用事件类型常量。"""
     LIMIT_UP_FILTER = "limit_up_filter"
-    LIMIT_UP_REDISTRIBUTE = "limit_up_redistribute"
-    IC_DECAY_ALERT = "ic_decay_alert"
-    FACTOR_COVERAGE_LOW = "factor_coverage_low"
+    TREND_SIGNAL = "trend_signal"
+    BACKTEST_RUN = "backtest_run"
     DATA_FETCH_FAILURE = "data_fetch_failure"
     DATA_FETCH_SUCCESS = "data_fetch_success"
-    REPORT_GENERATED = "report_generated"
     CONFIG_VALIDATION_ERROR = "config_validation_error"
-    PROMOTION_GATE_CHECK = "promotion_gate_check"
-    OOS_DEGRADATION = "oos_degradation"
-    REBALANCE_EXECUTED = "rebalance_executed"
     SCHEMA_MIGRATION = "schema_migration"
 
 

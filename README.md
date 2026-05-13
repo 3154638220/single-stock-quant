@@ -14,6 +14,20 @@ python scripts/run_signal.py --symbol 600930 --history 60
 python scripts/run_backtest_single.py --symbol 600930 --compare-modes
 ```
 
+Optional stock display names can be supplied through `paths.stock_name_cache`
+(`data/stock_names.csv` by default). The CSV may use columns such as
+`symbol,name` or `证券代码,证券简称`; commands fall back to the 6-digit symbol
+when the cache is absent.
+
+If you already have a compatible DuckDB market database, copy it into this
+project instead of pointing commands at another repository:
+
+```bash
+mkdir -p data
+cp /path/to/market.duckdb data/market.duckdb
+cp /path/to/a_share_stock_names.csv data/stock_names.csv
+```
+
 ## Trend Modes
 
 | mode | rule | use case |

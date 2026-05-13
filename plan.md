@@ -702,3 +702,143 @@ requests>=2.31
 4. **单股集中风险**：系统仅做择时，不做分散。实际使用时建议对多只自选股分别运行，人工决定仓位大小。
 
 5. **过拟合警告**：不要用同一支股票的历史数据优化指标参数，再用该股回测验证——这是典型的 in-sample 过拟合。参数应在宽泛的默认值（MACD 12/26/9 为业界通用）下使用，或用其他股票验证后再应用。
+
+---
+
+## 十、实施进度记录
+
+### 2026-05-12
+
+已完成：
+
+1. Phase 1 清场基本完成：仓库当前仅保留单股趋势系统相关的 `src/data_fetcher/`、`src/indicators/`、`src/signals/`、`src/backtest/`、`src/market/`、`src/notify/` 等目录；旧的 `features/models/portfolio/pipeline/reporting/research/monitoring/analysis/cli` 目录已不存在。
+2. Phase 2 指标核心完成：`src/indicators/dktrend.py` 已实现 `macd_cross`、`ma_cross`、`boll_trend` 三种模式，输出 `dk_value/dk_color/dk_signal/dk_run_len`；`tests/test_dktrend.py` 覆盖滚动工具和变色信号。
+3. Phase 3 信号系统完成：`src/signals/` 已实现 `SignalRecord`、`generate_signals()`、`get_current_signal()`；`scripts/run_signal.py` 支持单股、多股、自选列表、历史输出、模式切换、信号过滤和企业微信推送。
+4. Phase 4 单股回测完成：`src/backtest/single_stock.py` 已实现 T+1 开盘执行、买入遇一字涨停顺延、成本扣减、末尾持仓平仓和绩效汇总；`scripts/run_backtest_single.py` 支持三模式对比和交易记录导出。
+5. Phase 5 数据拉取与配置文档基本完成：`scripts/fetch_stock.py` 支持单股/多股增量拉取；`config.yaml.example`、`README.md`、`docs/README.md`、`docs/indicator_formula.md`、`docs/backtest_guide.md` 已按单股趋势系统更新；依赖已精简到 `requirements-base.txt`。
+
+本轮新增推进：
+
+1. `src/settings.py`：`load_config()` 改为默认配置与用户配置递归合并，缺省配置文件时也返回完整默认骨架，避免部分配置文件导致脚本缺字段。
+2. `scripts/fetch_stock.py`：`--check-quality` 改为按本次拉取标的输出最近 30 条日线摘要，包括日期区间、最新收盘价、最大自然日间隔、OHLCV 缺失数和 OHLC 异常数。
+3. `src/event_log.py`、`src/notify/__init__.py`、`src/market/tradability.py`：清理残留的月度选股/IC 监控描述，改为单股趋势系统语境。
+4. `tests/test_settings.py`：新增配置合并回归测试。
+
+验收：
+
+```bash
+pytest
+# 6 passed, 1 warning
+
+python -m py_compile scripts/fetch_stock.py scripts/run_signal.py scripts/run_backtest_single.py src/settings.py src/event_log.py src/notify/__init__.py
+# passed
+```
+
+后续建议：
+
+1. 运行真实数据链路验证：`python scripts/fetch_stock.py --symbol 600930 --check-quality` → `python scripts/run_signal.py --symbol 600930 --history 60` → `python scripts/run_backtest_single.py --symbol 600930 --compare-modes`。
+2. 如需进一步收尾，可继续精简 `src/backtest/engine.py`、`src/backtest/transaction_costs.py`、`src/data_fetcher/migrations.py` 中仍保留的组合/月度历史兼容逻辑，但当前单股主链路已可独立运行。
+
+继续推进：
+
+1. `src/market/tradability.py`：删除旧截面候选池过滤函数 `prefilter_stock_pool()`，该模块现在只保留单股回测需要的涨停价、一字涨停不可买、停牌近似判断。
+2. `src/backtest/single_stock.py`：买入执行除一字涨停外，新增跳过停牌/无成交量日；卖出执行也会顺延到第一天可交易开盘。
+3. `src/backtest/single_stock.py`：延迟买入若在实际成交前遇到卖出信号，会取消待执行买入，避免趋势已翻空后仍进场。
+4. `tests/test_tradability.py`：新增 A 股涨停比例、一字涨停容差、无效价格、停牌近似测试。
+5. `tests/test_single_stock_bt.py`：新增延迟买入取消、停牌日卖出顺延测试。
+
+本轮验收：
+
+```bash
+pytest
+# 12 passed, 1 warning
+
+python -m py_compile src/market/tradability.py tests/test_tradability.py src/backtest/single_stock.py tests/test_single_stock_bt.py
+# passed
+```
+
+2026-05-13 继续推进：
+
+1. `src/data_fetcher/stock_name_cache.py`：移除旧的 `fetch_stock_names.py` 子进程刷新逻辑，改为纯本地 CSV 名称缓存读取；新增 `resolve_stock_name_cache_path()`、`load_stock_name_map()`、`resolve_stock_names()`。
+2. `config.yaml.example` / `src/settings.py`：新增 `paths.stock_name_cache: data/stock_names.csv` 默认配置。
+3. `scripts/run_signal.py`：输出和企业微信推送使用本地名称缓存中的股票名；缓存缺失或无匹配时自动回退 6 位代码。
+4. `scripts/run_backtest_single.py`：回测报告标题使用本地名称缓存中的股票名，并传入 `SingleStockBacktestResult.stock_name`。
+5. `README.md`：补充股票名称缓存 CSV 的使用说明。
+6. `docs/backtest_guide.md`：补充停牌/无成交量卖出顺延，以及延迟买入遇卖出信号取消的回测假设。
+7. `tests/test_stock_name_cache.py`：新增名称缓存列名兼容、名称回退、配置路径解析测试。
+
+本轮验收：
+
+```bash
+pytest
+# 15 passed, 1 warning
+
+python -m py_compile src/data_fetcher/stock_name_cache.py scripts/run_signal.py scripts/run_backtest_single.py src/settings.py
+# passed
+
+python scripts/run_signal.py --help
+python scripts/run_backtest_single.py --help
+# passed
+```
+
+### 2026-05-13 状态汇总与剩余事项
+
+当前状态：
+
+1. 单股多空趋势主链路已打通：本地日线拉取、DK 趋势计算、信号查看、T+1 单股回测、三模式对比、交易记录导出、可选企业微信推送都已有入口。
+2. 单股回测约束已补强：买入遇一字涨停会顺延；买卖都会跳过停牌/无成交量开盘；延迟买入若在成交前遇到卖出信号会取消。
+3. 配置和名称显示已补强：配置会与默认值递归合并；CLI 支持本地股票名称缓存，缺失时回退 6 位代码。
+4. 当前本地验收：`pytest` 为 `15 passed, 1 warning`；核心脚本 `--help` 和相关模块 `py_compile` 通过。
+
+这个文档还剩的实际事项：
+
+1. **真实数据链路验收（必做）**：需要在有网络和 AkShare 可用时跑通 `fetch_stock -> run_signal -> run_backtest_single`。建议命令：
+
+   ```bash
+   python scripts/fetch_stock.py --symbol 600930 --check-quality
+   python scripts/run_signal.py --symbol 600930 --history 60
+   python scripts/run_backtest_single.py --symbol 600930 --compare-modes
+   ```
+
+2. **旧兼容模块是否继续裁剪（可选）**：`src/backtest/engine.py`、`src/backtest/transaction_costs.py`、`src/data_fetcher/migrations.py` 仍保留一部分组合/月度历史兼容逻辑。当前单股主链路不依赖这些旧能力；若目标是彻底瘦身，可继续拆除或降级为内部兼容模块。
+3. **历史结果目录是否归档（可选）**：`results/` 里仍有旧月度选股实验 CSV/JSON。代码主链路已不依赖它们；若要让仓库呈现为纯单股趋势系统，可以移到归档目录或从版本中移除。
+4. **实盘输出打磨（可选）**：`run_signal.py` 目前是纯文本输出，可继续优化为更接近文档示例的中文表格、最近信号列表、操作建议文案。
+5. **数据质量策略细化（可选）**：`fetch_stock --check-quality` 已输出近 30 条摘要；后续可增加“失败即退出”的阈值参数，避免低质量数据进入回测。
+6. **可视化校验（可选）**：文档中的“视觉校验脚本”尚未实现；如需要和东方财富截图对比，可增加临时或正式绘图脚本。
+7. **通知闭环验证（可选）**：代码已接入企业微信 Webhook，但还需要用真实 webhook 做一次 BUY/SELL 样例推送验证。
+
+结论：Phase 2、Phase 3、Phase 4、Phase 5 的代码主功能已基本完成；文档里真正剩下的是真实数据链路验收，以及是否继续做仓库瘦身和体验打磨。
+
+2026-05-13 本轮继续推进：
+
+1. 真实数据链路改用本地已有数据验收：从 `~/hjx/lh/data/market.duckdb` 复制到当前项目 `data/market.duckdb`，从 `~/hjx/lh/data/cache/a_share_stock_names.csv` 复制到 `data/stock_names.csv`，未使用跨仓库链接。
+2. 数据库验收：`a_share_daily` 共 10,532,711 行、5,197 个标的，日期覆盖 `2015-01-05` 至 `2026-05-08`；`600930` 最新日线为 `2026-05-08`。
+3. `scripts/run_signal.py`：输出打磨为中文状态页，包含最新交易日、指标模式、当前多空趋势、连续天数、最新信号、操作建议；`--history` 改为展示最近 N 条日线内的 BUY/SELL 变色记录。
+4. `scripts/run_signal.py`：增加 `--duckdb-path` 与 `--stock-name-cache` 覆盖参数，默认仍读取当前项目 `data/market.duckdb` 和 `data/stock_names.csv`。
+5. `README.md`：补充复用已有本地 DuckDB 数据时的复制方式，避免依赖其他仓库路径。
+
+本轮真实数据验收：
+
+```bash
+python scripts/run_signal.py --symbol 600930 --history 60
+# 华电新能 (600930) | 最新交易日：2026-05-08 | 指标：macd_cross
+# 当前多空趋势：多头 | 已连续 9 天 | 最新收盘：6.32 | 最新信号：HOLD
+# 近期变色信号：2026-02-09 BUY、2026-03-30 SELL、2026-04-23 BUY
+
+python scripts/run_backtest_single.py --symbol 600930 --compare-modes
+# macd_cross total=-1.85%, buy_hold=-11.48%, sharpe=-0.02, max_dd=18.00%, trades=4, win_rate=25.00%
+# ma_cross   total=-9.50%, buy_hold=-11.48%, sharpe=-0.54, max_dd=19.46%, trades=7, win_rate=28.57%
+# boll_trend total=-9.79%, buy_hold=-11.48%, sharpe=-0.53, max_dd=18.00%, trades=10, win_rate=10.00%
+```
+
+本轮验收：
+
+```bash
+pytest
+# 15 passed, 1 warning
+
+python -m py_compile scripts/run_signal.py scripts/run_backtest_single.py
+# passed
+```
+
+备注：直接运行 `fetch_stock.py` 时，当前沙箱网络无法访问 Sina / Eastmoney，报 `Operation not permitted`；本轮真实链路验收已使用复制到当前项目的本地 DuckDB 完成。`data/` 已在 `.gitignore` 中，复制的 2.4G 数据库不会进入版本控制。
