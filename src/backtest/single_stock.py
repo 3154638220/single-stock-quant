@@ -7,9 +7,12 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from src.backtest.performance_panel import compute_performance_panel
+from src.backtest.performance_panel import annualized_return_cagr, compute_performance_panel
+from src.backtest.risk_metrics import risk_off_multiplier_from_index
 from src.indicators import DKTrendParams, compute_dktrend
 from src.market.tradability import is_open_limit_up_unbuyable, is_row_suspended_like
+from src.signals.consensus import compute_consensus_trend
+from src.signals.generator import apply_volume_confirmation
 
 
 @dataclass(frozen=True)
@@ -26,9 +29,15 @@ class SingleStockBacktestResult:
     total_return: float
     annualized_return: float
     buy_hold_return: float
+    buy_hold_annualized_return: float
+    excess_annualized_return: float
+    information_ratio: float
+    beta_to_benchmark: float
     sharpe_ratio: float
     max_drawdown: float
     calmar_ratio: float
+    stop_loss_exits: int
+    trailing_stop_exits: int
     trade_log: pd.DataFrame
     daily_returns: pd.Series
 
@@ -89,6 +98,72 @@ def _max_consecutive(values: list[bool], target: bool) -> int:
     return best
 
 
+def _future_exit_index(actions: dict[int, str], start_idx: int) -> int | None:
+    exits = [idx for idx, action in actions.items() if idx >= start_idx and action in {"sell", "stop_loss", "trailing_stop"}]
+    return min(exits) if exits else None
+
+
+def _index_allows_new_position(
+    index_ohlcv: pd.DataFrame | None,
+    *,
+    benchmark_symbol: str,
+    asof: pd.Timestamp,
+    lookback_days: int,
+    drop_threshold: float,
+    risk_off_factor: float,
+) -> bool:
+    if index_ohlcv is None or index_ohlcv.empty:
+        return True
+    multiplier, _, _ = risk_off_multiplier_from_index(
+        index_ohlcv,
+        benchmark_symbol=str(benchmark_symbol).zfill(6),
+        asof=asof,
+        lookback_trading_days=int(lookback_days),
+        drop_threshold=float(drop_threshold),
+        risk_off_factor=float(risk_off_factor),
+    )
+    return multiplier > 0.0
+
+
+def _close_to_returns(df: pd.DataFrame, name: str) -> pd.Series:
+    if df is None or df.empty or "close" not in df.columns:
+        return pd.Series(dtype=np.float64, name=name)
+    work = df.copy()
+    if "trade_date" in work.columns:
+        dates = pd.to_datetime(work["trade_date"]).dt.normalize()
+    else:
+        dates = pd.to_datetime(work.index).normalize()
+    close = pd.to_numeric(work["close"], errors="coerce")
+    out = pd.Series(close.to_numpy(dtype=np.float64), index=dates, name="close")
+    out = out.sort_index()
+    out = out[~out.index.duplicated(keep="last")]
+    return out.pct_change().fillna(0.0).rename(name)
+
+
+def _information_ratio(strategy_returns: pd.Series, benchmark_returns: pd.Series, periods_per_year: float = 252.0) -> float:
+    aligned = pd.concat([strategy_returns, benchmark_returns], axis=1, join="inner").dropna()
+    if len(aligned) < 2:
+        return float("nan")
+    active = aligned.iloc[:, 0] - aligned.iloc[:, 1]
+    sd = float(active.std(ddof=1))
+    if sd <= 0 or not np.isfinite(sd):
+        return float("nan")
+    return float(active.mean() / sd * np.sqrt(periods_per_year))
+
+
+def _beta_to_benchmark(strategy_returns: pd.Series, benchmark_returns: pd.Series) -> float:
+    aligned = pd.concat([strategy_returns, benchmark_returns], axis=1, join="inner").dropna()
+    if len(aligned) < 2:
+        return float("nan")
+    strategy = aligned.iloc[:, 0].to_numpy(dtype=np.float64)
+    benchmark = aligned.iloc[:, 1].to_numpy(dtype=np.float64)
+    var = float(np.var(benchmark, ddof=1))
+    if var <= 0 or not np.isfinite(var):
+        return float("nan")
+    cov = float(np.cov(strategy, benchmark, ddof=1)[0, 1])
+    return float(cov / var)
+
+
 def run_single_stock_backtest(
     symbol: str,
     ohlcv: pd.DataFrame,
@@ -97,11 +172,39 @@ def run_single_stock_backtest(
     cost_bps: float = 15.0,
     initial_capital: float = 100_000.0,
     stock_name: str = "",
+    volume_confirm: bool = False,
+    volume_lookback: int = 20,
+    volume_ratio_min: float = 1.0,
+    consensus_n_agree: int | None = None,
+    enable_index_filter: bool = False,
+    index_ohlcv: pd.DataFrame | None = None,
+    benchmark_symbol: str = "510300",
+    extreme_lookback_days: int = 10,
+    extreme_drop_threshold: float = 0.05,
+    risk_off_factor: float = 0.0,
+    stop_loss_pct: float = 0.0,
+    trailing_stop_pct: float = 0.0,
 ) -> SingleStockBacktestResult:
     """Backtest one stock with T+1 open execution and single-position long/flat state."""
     code = str(symbol).strip().zfill(6)
     df = _prepare_ohlcv(ohlcv)
-    trend = compute_dktrend(df, params).reset_index(drop=True)
+    if consensus_n_agree is not None and int(consensus_n_agree) > 1:
+        trend = compute_consensus_trend(
+            df,
+            base_params=params,
+            n_agree=int(consensus_n_agree),
+            volume_confirm=volume_confirm,
+            volume_lookback=volume_lookback,
+            volume_ratio_min=volume_ratio_min,
+        ).reset_index(drop=True)
+    else:
+        trend = compute_dktrend(df, params).reset_index(drop=True)
+        trend = apply_volume_confirmation(
+            trend,
+            enabled=volume_confirm,
+            lookback=volume_lookback,
+            volume_ratio_min=volume_ratio_min,
+        ).reset_index(drop=True)
     cost = max(float(cost_bps), 0.0) * 1e-4
     actions: dict[int, str] = {}
     planned_long = False
@@ -112,6 +215,15 @@ def run_single_stock_backtest(
             pending_buy_idx = None
         sig = str(row.get("dk_signal", ""))
         if sig == "buy" and not planned_long and pending_buy_idx is None and i + 1 < len(df):
+            if enable_index_filter and not _index_allows_new_position(
+                index_ohlcv,
+                benchmark_symbol=benchmark_symbol,
+                asof=pd.Timestamp(df.loc[i, "trade_date"]),
+                lookback_days=extreme_lookback_days,
+                drop_threshold=extreme_drop_threshold,
+                risk_off_factor=risk_off_factor,
+            ):
+                continue
             j = _next_buy_index(df, code, i + 1)
             if j is None:
                 continue
@@ -133,8 +245,11 @@ def run_single_stock_backtest(
     entry_date = pd.NaT
     entry_price = float("nan")
     entry_cash = float("nan")
+    highest_close = float("nan")
     trades: list[dict] = []
     equity = np.zeros(len(df), dtype=np.float64)
+    stop_loss = max(float(stop_loss_pct), 0.0)
+    trailing_stop = max(float(trailing_stop_pct), 0.0)
 
     for i in range(len(df)):
         action = actions.get(i)
@@ -147,7 +262,8 @@ def run_single_stock_backtest(
                 in_pos = True
                 entry_date = pd.Timestamp(df.loc[i, "trade_date"])
                 entry_price = price
-        elif action == "sell" and in_pos:
+                highest_close = float(df.loc[i, "close"])
+        elif action in {"sell", "stop_loss", "trailing_stop"} and in_pos:
             price = float(df.loc[i, "open"])
             if price <= 0 or not np.isfinite(price):
                 continue
@@ -163,11 +279,26 @@ def run_single_stock_backtest(
                     "sell_price": price,
                     "hold_days": int((exit_date - entry_date).days),
                     "return": ret,
-                    "exit_reason": "signal",
+                    "exit_reason": action if action != "sell" else "signal",
                 }
             )
             in_pos = False
+            highest_close = float("nan")
         equity[i] = shares * float(df.loc[i, "close"]) if in_pos else cash
+        if in_pos:
+            close_px = float(df.loc[i, "close"])
+            if np.isfinite(close_px):
+                highest_close = close_px if not np.isfinite(highest_close) else max(highest_close, close_px)
+            forced_reason = ""
+            if stop_loss > 0 and np.isfinite(close_px) and np.isfinite(entry_price) and close_px / entry_price - 1.0 < -stop_loss:
+                forced_reason = "stop_loss"
+            elif trailing_stop > 0 and np.isfinite(close_px) and np.isfinite(highest_close) and close_px / highest_close - 1.0 < -trailing_stop:
+                forced_reason = "trailing_stop"
+            if forced_reason and i + 1 < len(df):
+                j = _next_sell_index(df, i + 1)
+                existing = _future_exit_index(actions, i + 1)
+                if j is not None and (existing is None or j < existing):
+                    actions[j] = forced_reason
 
     last_idx = len(df) - 1
     if in_pos:
@@ -188,6 +319,7 @@ def run_single_stock_backtest(
             }
         )
         in_pos = False
+        highest_close = float("nan")
     equity[last_idx] = cash
     for k in range(1, len(equity)):
         if equity[k] == 0:
@@ -198,7 +330,19 @@ def run_single_stock_backtest(
     trade_log = pd.DataFrame(trades)
     trade_returns = trade_log["return"].to_numpy(dtype=np.float64) if not trade_log.empty else np.array([])
     wins = [bool(x > 0) for x in trade_returns]
+    stop_loss_exits = int((trade_log["exit_reason"] == "stop_loss").sum()) if not trade_log.empty else 0
+    trailing_stop_exits = int((trade_log["exit_reason"] == "trailing_stop").sum()) if not trade_log.empty else 0
     buy_hold_return = float(df["close"].iloc[-1] / df["close"].iloc[0] - 1.0)
+    buy_hold_returns = _close_to_returns(df, "buy_hold_ret")
+    buy_hold_annualized_return = annualized_return_cagr(buy_hold_returns.to_numpy(dtype=np.float64))
+    excess_annualized_return = (
+        float(panel.annualized_return - buy_hold_annualized_return)
+        if np.isfinite(panel.annualized_return) and np.isfinite(buy_hold_annualized_return)
+        else float("nan")
+    )
+    information_ratio = _information_ratio(daily_returns, buy_hold_returns)
+    benchmark_returns = _close_to_returns(index_ohlcv, "benchmark_ret") if index_ohlcv is not None else pd.Series(dtype=np.float64, name="benchmark_ret")
+    beta_to_benchmark = _beta_to_benchmark(daily_returns, benchmark_returns)
     start_s = pd.Timestamp(df["trade_date"].iloc[0]).date().isoformat()
     end_s = pd.Timestamp(df["trade_date"].iloc[-1]).date().isoformat()
     return SingleStockBacktestResult(
@@ -214,9 +358,15 @@ def run_single_stock_backtest(
         total_return=panel.total_return,
         annualized_return=panel.annualized_return,
         buy_hold_return=buy_hold_return,
+        buy_hold_annualized_return=buy_hold_annualized_return,
+        excess_annualized_return=excess_annualized_return,
+        information_ratio=information_ratio,
+        beta_to_benchmark=beta_to_benchmark,
         sharpe_ratio=panel.sharpe_ratio,
         max_drawdown=panel.max_drawdown,
         calmar_ratio=panel.calmar_ratio,
+        stop_loss_exits=stop_loss_exits,
+        trailing_stop_exits=trailing_stop_exits,
         trade_log=trade_log,
         daily_returns=daily_returns,
     )

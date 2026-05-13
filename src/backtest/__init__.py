@@ -11,6 +11,7 @@ from .performance_panel import (
     PerformancePanel,
     aggregate_panels,
     compute_performance_panel,
+    deflated_sharpe_ratio,
     panel_from_mapping,
 )
 from .risk_metrics import (
@@ -24,6 +25,7 @@ from .transaction_costs import (
     net_simple_return_from_long_hold,
     transaction_cost_params_from_mapping,
 )
+from .wfo import DEFAULT_PARAM_GRID, normalize_param_grid, run_walk_forward_optimization
 
 __all__ = [
     "BacktestConfig",
@@ -31,18 +33,22 @@ __all__ = [
     "PerformancePanel",
     "SingleStockBacktestResult",
     "TransactionCostParams",
+    "DEFAULT_PARAM_GRID",
     "aggregate_panels",
     "build_daily_weights",
     "build_limit_up_open_mask",
     "build_open_to_open_returns",
     "compute_performance_panel",
+    "deflated_sharpe_ratio",
     "max_drawdown_from_returns",
     "net_simple_return_from_long_hold",
+    "normalize_param_grid",
     "panel_from_mapping",
     "realized_volatility",
     "result_to_dict",
     "risk_config_from_mapping",
     "run_backtest",
+    "run_walk_forward_optimization",
     "run_single_stock_backtest",
     "transaction_cost_params_from_mapping",
 ]

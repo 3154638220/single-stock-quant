@@ -31,9 +31,67 @@ def _signal_from_raw(raw: str) -> Signal:
     return Signal.HOLD
 
 
-def generate_signals(ohlcv: pd.DataFrame, params: DKTrendParams | None = None) -> list[SignalRecord]:
+def apply_volume_confirmation(
+    trend: pd.DataFrame,
+    *,
+    enabled: bool = False,
+    lookback: int = 20,
+    volume_ratio_min: float = 1.0,
+) -> pd.DataFrame:
+    """Downgrade BUY signals until volume confirms the red trend transition."""
+    if not enabled:
+        return trend
+    if "volume" not in trend.columns:
+        out = trend.copy()
+        out["dk_signal"] = out["dk_signal"].mask(out["dk_signal"] == "buy", "")
+        return out
+
+    out = trend.copy()
+    vol = pd.to_numeric(out["volume"], errors="coerce")
+    avg = vol.rolling(max(int(lookback), 1), min_periods=max(int(lookback), 1)).mean()
+    confirmed = vol >= avg * max(float(volume_ratio_min), 0.0)
+
+    filtered_signal: list[str] = []
+    in_position = False
+    pending_buy = False
+    for raw_sig, color, ok in zip(out["dk_signal"], out["dk_color"], confirmed):
+        sig = ""
+        raw = str(raw_sig)
+        c = str(color)
+        if c == "green":
+            pending_buy = False
+            if raw == "sell" and in_position:
+                sig = "sell"
+                in_position = False
+        elif c == "red":
+            if raw == "buy" and not in_position:
+                pending_buy = True
+            if pending_buy and not in_position and bool(ok):
+                sig = "buy"
+                in_position = True
+                pending_buy = False
+        filtered_signal.append(sig)
+
+    out["dk_signal"] = filtered_signal
+    return out
+
+
+def generate_signals(
+    ohlcv: pd.DataFrame,
+    params: DKTrendParams | None = None,
+    *,
+    volume_confirm: bool = False,
+    volume_lookback: int = 20,
+    volume_ratio_min: float = 1.0,
+) -> list[SignalRecord]:
     """Compute DK trend and return one record per valid bar."""
     trend = compute_dktrend(ohlcv, params or DKTrendParams())
+    trend = apply_volume_confirmation(
+        trend,
+        enabled=volume_confirm,
+        lookback=volume_lookback,
+        volume_ratio_min=volume_ratio_min,
+    )
     records: list[SignalRecord] = []
     position = Position.FLAT
     for idx, row in trend.iterrows():

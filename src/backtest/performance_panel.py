@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import asdict, dataclass
 from typing import Any, Mapping, Optional
 
@@ -79,6 +80,116 @@ def sharpe_ratio(
     return float(mu / sd * np.sqrt(periods_per_year))
 
 
+def _normal_cdf(x: float) -> float:
+    return 0.5 * (1.0 + math.erf(float(x) / math.sqrt(2.0)))
+
+
+def _normal_ppf(p: float) -> float:
+    """Inverse standard normal CDF using Peter J. Acklam's rational approximation."""
+    if not 0.0 < p < 1.0:
+        if p == 0.0:
+            return -math.inf
+        if p == 1.0:
+            return math.inf
+        return float("nan")
+
+    a = [
+        -3.969683028665376e01,
+        2.209460984245205e02,
+        -2.759285104469687e02,
+        1.383577518672690e02,
+        -3.066479806614716e01,
+        2.506628277459239e00,
+    ]
+    b = [
+        -5.447609879822406e01,
+        1.615858368580409e02,
+        -1.556989798598866e02,
+        6.680131188771972e01,
+        -1.328068155288572e01,
+    ]
+    c = [
+        -7.784894002430293e-03,
+        -3.223964580411365e-01,
+        -2.400758277161838e00,
+        -2.549732539343734e00,
+        4.374664141464968e00,
+        2.938163982698783e00,
+    ]
+    d = [
+        7.784695709041462e-03,
+        3.224671290700398e-01,
+        2.445134137142996e00,
+        3.754408661907416e00,
+    ]
+
+    plow = 0.02425
+    phigh = 1.0 - plow
+    if p < plow:
+        q = math.sqrt(-2.0 * math.log(p))
+        return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / (
+            (((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1.0
+        )
+    if p > phigh:
+        q = math.sqrt(-2.0 * math.log(1.0 - p))
+        return -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / (
+            (((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1.0
+        )
+
+    q = p - 0.5
+    r = q * q
+    return (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q / (
+        ((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1.0
+    )
+
+
+def deflated_sharpe_ratio(
+    returns: np.ndarray,
+    *,
+    risk_free_daily: float = 0.0,
+    n_trials: int = 1,
+) -> tuple[float, float]:
+    """
+    Bailey & Lopez de Prado style Deflated Sharpe Ratio.
+
+    Returns ``(dsr, pvalue)`` where ``dsr`` is the probability that the observed
+    Sharpe exceeds the multiple-testing adjusted reference Sharpe.
+    """
+    r = _finite_returns(returns)
+    if r.size < 3:
+        return float("nan"), float("nan")
+    ex = r - float(risk_free_daily)
+    mu = float(np.mean(ex))
+    sd = float(np.std(ex, ddof=1))
+    if sd <= 0 or not np.isfinite(sd):
+        return float("nan"), float("nan")
+
+    sr = mu / sd
+    centered = ex - mu
+    pop_sd = float(np.std(ex, ddof=0))
+    if pop_sd <= 0 or not np.isfinite(pop_sd):
+        return float("nan"), float("nan")
+    zret = centered / pop_sd
+    skew = float(np.mean(zret**3))
+    kurt = float(np.mean(zret**4))
+    denom = 1.0 - skew * sr + ((kurt - 1.0) / 4.0) * sr * sr
+    if denom <= 0.0 or not np.isfinite(denom):
+        return float("nan"), float("nan")
+
+    trials = max(int(n_trials), 1)
+    sr_ref = 0.0
+    if trials > 1:
+        euler_gamma = 0.5772156649015329
+        expected_max_z = (1.0 - euler_gamma) * _normal_ppf(1.0 - 1.0 / trials) + euler_gamma * _normal_ppf(
+            1.0 - 1.0 / (trials * math.e)
+        )
+        sr_ref = math.sqrt(denom / (r.size - 1.0)) * expected_max_z
+
+    test_stat = (sr - sr_ref) * math.sqrt(r.size - 1.0) / math.sqrt(denom)
+    dsr = _normal_cdf(test_stat)
+    return float(dsr), float(1.0 - dsr)
+
+
 def calmar_ratio(
     annualized_return: float,
     max_drawdown: float,
@@ -118,7 +229,7 @@ def compute_performance_panel(
         可选，与 ``returns`` 对齐或可聚合的换手序列；若提供则取 ``nanmean`` 为 turnover_mean，
         否则 turnover_mean 为 nan。
     n_concurrent_strategies
-        Kept for API compatibility. No extra statistical test is computed.
+        Number of strategy trials considered for Deflated Sharpe Ratio.
     """
     r = np.asarray(returns, dtype=np.float64).ravel()
     r_fin = _finite_returns(r)
@@ -137,8 +248,11 @@ def compute_performance_panel(
     else:
         t_mean = float("nan")
 
-    dsr = float("nan")
-    dsr_pvalue = float("nan")
+    dsr, dsr_pvalue = deflated_sharpe_ratio(
+        r_fin,
+        risk_free_daily=risk_free_daily,
+        n_trials=n_concurrent_strategies,
+    )
 
     return PerformancePanel(
         annualized_return=ann,
@@ -171,6 +285,8 @@ def aggregate_panels(
         "win_rate",
         "turnover_mean",
         "total_return",
+        "dsr",
+        "dsr_pvalue",
     )
     method = str(method).lower()
     agg: dict[str, Any] = {"n_folds": len(panels), "method": method}
@@ -198,4 +314,6 @@ def panel_from_mapping(m: Mapping[str, Any]) -> PerformancePanel:
         n_periods=int(m["n_periods"]),
         total_return=float(m["total_return"]),
         periods_per_year=float(m["periods_per_year"]),
+        dsr=float(m.get("dsr", float("nan"))),
+        dsr_pvalue=float(m.get("dsr_pvalue", float("nan"))),
     )

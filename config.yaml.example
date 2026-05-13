@@ -32,6 +32,7 @@ quality:
 
 trend_signal:
   mode: macd_cross
+  consensus_n_agree: 2
   macd_fast: 12
   macd_slow: 26
   macd_signal: 9
@@ -40,10 +41,30 @@ trend_signal:
   ma_smooth: 3
   boll_window: 20
 
+signal_filter:
+  volume_confirm: false
+  volume_lookback: 20
+  volume_ratio_min: 1.0
+
 backtest:
   cost_bps: 15.0
   initial_capital: 100000
   execution: tplus1_open
+  stop_loss_pct: 0.0
+  trailing_stop_pct: 0.0
+
+wfo:
+  param_grid:
+    macd_fast: [8, 10, 12, 14]
+    macd_slow: [22, 26, 30]
+    macd_signal: [7, 9, 11]
+
+risk:
+  enable_index_filter: false
+  benchmark_symbol: "510300"
+  extreme_lookback_days: 10
+  extreme_drop_threshold: 0.05
+  risk_off_factor: 0.0
 
 notify:
   wecom_webhook_url: ""
