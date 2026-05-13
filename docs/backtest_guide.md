@@ -23,3 +23,10 @@ python scripts/run_backtest_single.py --symbol 600930 --duckdb-path /path/to/mar
 
 Use `--stock-name-cache /path/to/stock_names.csv` when the display-name CSV is
 outside the configured project data directory.
+
+To visually inspect the same indicator mode before or after a backtest:
+
+```bash
+pip install ".[viz]"
+python scripts/plot_dktrend.py --symbol 600930 --mode macd_cross --history 180
+```

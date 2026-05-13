@@ -1,9 +1,0 @@
-signal_date,candidate_pool_version,model,top_k,industry_level1,industry_count,topk_count,industry_share
-2024-03-31,U1_liquid_tradable,M5_plus_industry_breadth_elasticnet_excess,2,计算机,2,2,1.0
-2024-03-31,U1_liquid_tradable,M5_plus_industry_breadth_logistic_top20,2,计算机,2,2,1.0
-2024-03-31,U1_liquid_tradable,M5_price_volume_only_elasticnet_excess,2,计算机,2,2,1.0
-2024-03-31,U1_liquid_tradable,M5_price_volume_only_logistic_top20,2,计算机,2,2,1.0
-2024-04-30,U1_liquid_tradable,M5_plus_industry_breadth_elasticnet_excess,2,计算机,2,2,1.0
-2024-04-30,U1_liquid_tradable,M5_plus_industry_breadth_logistic_top20,2,计算机,2,2,1.0
-2024-04-30,U1_liquid_tradable,M5_price_volume_only_elasticnet_excess,2,计算机,2,2,1.0
-2024-04-30,U1_liquid_tradable,M5_price_volume_only_logistic_top20,2,计算机,2,2,1.0

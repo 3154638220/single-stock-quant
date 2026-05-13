@@ -12,6 +12,7 @@ pip install -e .
 python scripts/fetch_stock.py --symbol 600930 --check-quality
 python scripts/run_signal.py --symbol 600930 --history 60
 python scripts/run_backtest_single.py --symbol 600930 --compare-modes
+python scripts/plot_dktrend.py --symbol 600930 --history 180
 ```
 
 Optional stock display names can be supplied through `paths.stock_name_cache`
@@ -79,6 +80,14 @@ python scripts/run_backtest_single.py --symbol 600930 --export-trades
 python scripts/run_backtest_single.py --symbol 600930 --duckdb-path /path/to/market.duckdb --stock-name-cache /path/to/stock_names.csv
 ```
 
+Plot a local visual check:
+
+```bash
+pip install ".[viz]"
+python scripts/plot_dktrend.py --symbol 600930 --history 180
+python scripts/plot_dktrend.py --symbol 600930 --mode ma_cross --output data/output/600930_ma_cross.png
+```
+
 ## Structure
 
 ```text
@@ -93,4 +102,5 @@ scripts/
   fetch_stock.py
   run_signal.py
   run_backtest_single.py
+  plot_dktrend.py
 ```

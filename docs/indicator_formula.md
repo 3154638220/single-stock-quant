@@ -31,3 +31,14 @@ green -> red = buy
 red -> green = sell
 same color   = hold
 ```
+
+## Visual Check
+
+Use the local plotting script to compare the close-price path with red/green DK bars:
+
+```bash
+pip install ".[viz]"
+python scripts/plot_dktrend.py --symbol 600930 --mode macd_cross --history 180
+```
+
+The PNG is written to `data/output/{symbol}_{mode}_dktrend.png` unless `--output` is supplied.

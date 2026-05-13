@@ -1,5 +1,0 @@
-signal_date,candidate_pool_version,raw_universe_width,candidate_pool_width,label_valid_count,candidate_pool_pass_ratio
-2024-01-31,U2_risk_sane,10,10,10,1.0
-2024-02-29,U2_risk_sane,10,10,10,1.0
-2024-03-31,U2_risk_sane,10,10,10,1.0
-2024-04-30,U2_risk_sane,10,9,0,0.9

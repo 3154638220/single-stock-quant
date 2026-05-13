@@ -1,5 +1,0 @@
-signal_date,candidate_pool_version,model,model_type,top_k,candidate_pool_width,selected_count,topk_return,market_ew_return,topk_excess_vs_market,topk_industry_neutral_excess,candidate_pool_mean_return,topk_minus_pool_mean,nextk_return,topk_minus_nextk,turnover_half_l1,cost_bps,cost_drag,topk_excess_after_cost
-2024-03-31,U1_liquid_tradable,M6_top20_calibrated,top_bucket_classifier_rank_calibrated,2,10.0,2,0.061,0.002,0.059,0.041,0.021,0.039999999999999994,0.011000000000000003,0.049999999999999996,,10.0,,
-2024-04-30,U1_liquid_tradable,M6_top20_calibrated,top_bucket_classifier_rank_calibrated,2,10.0,2,0.064,0.008000000000000002,0.056,0.044000000000000004,0.024000000000000004,0.039999999999999994,0.014000000000000005,0.049999999999999996,0.0,10.0,0.0,0.056
-2024-03-31,U1_liquid_tradable,B0_market_ew,benchmark,2,,0,0.002,0.002,0.0,,,,,,,10.0,0.0,0.0
-2024-04-30,U1_liquid_tradable,B0_market_ew,benchmark,2,,0,0.008000000000000002,0.008000000000000002,0.0,,,,,,,10.0,0.0,0.0

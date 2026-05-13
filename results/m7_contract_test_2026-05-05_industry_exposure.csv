@@ -1,3 +1,0 @@
-signal_date,candidate_pool_version,model,top_k,industry,industry_count,topk_count,industry_share
-2024-04-30,U2_risk_sane,M6_xgboost_rank_ndcg,2,电子,1,2,0.5
-2024-04-30,U2_risk_sane,M6_xgboost_rank_ndcg,2,计算机,1,2,0.5

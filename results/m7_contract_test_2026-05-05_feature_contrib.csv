@@ -1,3 +1,0 @@
-signal_date,top_k,rank,symbol,candidate_pool_version,model,feature_contrib
-2024-04-30,2,1,000009,U2_risk_sane,M6_xgboost_rank_ndcg,feature_ret_20d=+10; feature_ret_60d=+5; feature_realized_vol_20d=+0.0909
-2024-04-30,2,2,000005,U2_risk_sane,M6_xgboost_rank_ndcg,feature_ret_20d=+4; feature_ret_60d=+2; feature_realized_vol_20d=+0.2

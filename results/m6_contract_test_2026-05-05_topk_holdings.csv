@@ -1,5 +1,0 @@
-signal_date,candidate_pool_version,model,model_type,top_k,selected_rank,symbol,score,label_forward_1m_o2o_return,industry_level1,risk_flags
-2024-03-31,U1_liquid_tradable,M6_top20_calibrated,top_bucket_classifier_rank_calibrated,2,1,000009,0.95,0.056,计算机,
-2024-03-31,U1_liquid_tradable,M6_top20_calibrated,top_bucket_classifier_rank_calibrated,2,2,000010,0.95,0.066,计算机,
-2024-04-30,U1_liquid_tradable,M6_top20_calibrated,top_bucket_classifier_rank_calibrated,2,1,000009,0.95,0.059000000000000004,计算机,
-2024-04-30,U1_liquid_tradable,M6_top20_calibrated,top_bucket_classifier_rank_calibrated,2,2,000010,0.95,0.069,计算机,

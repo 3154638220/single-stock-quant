@@ -1,9 +1,0 @@
-signal_date,candidate_pool_version,model,rank_ic,n
-2024-03-31,U1_liquid_tradable,M5_plus_industry_breadth_elasticnet_excess,0.9999999999999999,10
-2024-04-30,U1_liquid_tradable,M5_plus_industry_breadth_elasticnet_excess,0.9999999999999999,10
-2024-03-31,U1_liquid_tradable,M5_plus_industry_breadth_logistic_top20,0.9999999999999999,10
-2024-04-30,U1_liquid_tradable,M5_plus_industry_breadth_logistic_top20,0.9999999999999999,10
-2024-03-31,U1_liquid_tradable,M5_price_volume_only_elasticnet_excess,0.9999999999999999,10
-2024-04-30,U1_liquid_tradable,M5_price_volume_only_elasticnet_excess,0.9999999999999999,10
-2024-03-31,U1_liquid_tradable,M5_price_volume_only_logistic_top20,0.9999999999999999,10
-2024-04-30,U1_liquid_tradable,M5_price_volume_only_logistic_top20,0.9999999999999999,10
