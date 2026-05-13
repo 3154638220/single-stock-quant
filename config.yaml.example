@@ -46,6 +46,8 @@ signal_filter:
   volume_confirm: false
   volume_lookback: 20
   volume_ratio_min: 1.0
+  min_quality_score: 0
+  quality_score_mode: hard
 
 backtest:
   cost_bps: 15.0
@@ -60,6 +62,14 @@ backtest:
   stop_reentry_enabled: false
   stop_reentry_cooldown: 3
   stop_reentry_min_run: 2
+  time_stop_days: 0
+  time_stop_min_return: 0.0
+  profit_lock_trigger: 0.0
+  profit_lock_trailing: 0.0
+  market_exit_mode: off
+  volatility_target_ann: 0.0
+  volatility_lookback: 20
+  drawdown_throttle_enabled: false
   transaction_cost:
     commission_buy_bps: 2.5
     commission_sell_bps: 2.5
@@ -68,11 +78,19 @@ backtest:
 
 wfo:
   param_grid:
-    macd_fast: [8, 10, 12, 14]
-    macd_slow: [22, 26, 30]
-    macd_signal: [7, 9, 11]
+    # Keep combos under ~1000; expand per experiment.
+    macd_fast: [8, 12]
+    macd_slow: [22, 30]
+    macd_signal: [7, 9]
     min_run_len: [1, 2, 3]
-    stop_loss_pct: [0.05, 0.08, 0.10]
+    stop_loss_pct: [0.0, 0.06, 0.10]
+    atr_stop_multiplier: [0.0, 2.0]
+    min_quality_score: [0, 30]
+    time_stop_days: [0, 30]
+    profit_lock_trigger: [0.0, 0.15]
+    profit_lock_trailing: [0.0, 0.08]
+    volatility_target_ann: [0.0]
+    drawdown_throttle_enabled: [false]
 
 risk:
   enable_index_filter: false

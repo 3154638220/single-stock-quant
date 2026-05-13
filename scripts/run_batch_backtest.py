@@ -15,6 +15,7 @@ if str(ROOT) not in sys.path:
 
 from src.backtest.config import build_bt_kwargs
 from src.backtest.single_stock import run_single_stock_backtest
+from src.backtest.transaction_costs import TransactionCostParams, transaction_cost_params_from_mapping
 from src.data_fetcher.db_manager import DuckDBManager
 from src.data_fetcher.stock_name_cache import resolve_stock_name_cache_path, resolve_stock_names
 from src.indicators import DKTrendParams, TrendMode
@@ -38,6 +39,65 @@ def _params(cfg: dict, mode: str) -> DKTrendParams:
     return DKTrendParams.from_mapping(raw)
 
 
+def _pct(x: float) -> str:
+    return "nan" if x != x else f"{x * 100:.2f}%"
+
+
+def _signed_pct(x: float) -> str:
+    return "nan" if x != x else f"{x * 100:+.2f}%"
+
+
+COST_SCENARIOS = [
+    ("zero_cost", "零成本（上界）", None, None),
+    ("symmetric_15bps", "对称15bps", 15.0, None),
+    ("real_ashare", "真实A股", None, TransactionCostParams(
+        commission_buy_bps=2.5, commission_sell_bps=2.5,
+        slippage_bps_per_side=2.0, stamp_duty_sell_bps=5.0,
+    )),
+    ("high_slippage", "高滑点（机构）", None, TransactionCostParams(
+        commission_buy_bps=10.0, commission_sell_bps=10.0,
+        slippage_bps_per_side=5.0, stamp_duty_sell_bps=5.0,
+    )),
+]
+
+
+def _cost_sensitivity_rows(
+    symbol: str,
+    df: pd.DataFrame,
+    params: DKTrendParams,
+    base_kwargs: dict,
+    stock_name: str,
+) -> list[dict]:
+    rows = []
+    for scenario_id, label, cost_bps, cost_params in COST_SCENARIOS:
+        kwargs = dict(base_kwargs)
+        kwargs["stock_name"] = stock_name
+        if cost_bps is not None:
+            kwargs["cost_bps"] = float(cost_bps)
+            kwargs["cost_params"] = None
+        else:
+            kwargs["cost_params"] = cost_params
+        res = run_single_stock_backtest(symbol, df, params, **kwargs)
+        buy_bps = (cost_params.buy_fraction() * 1e4) if cost_params else (cost_bps or 0.0)
+        sell_bps = (cost_params.sell_fraction() * 1e4) if cost_params else (cost_bps or 0.0)
+        rows.append({
+            "symbol": symbol,
+            "stock_name": stock_name,
+            "scenario": scenario_id,
+            "label": label,
+            "buy_bps": buy_bps,
+            "sell_bps": sell_bps,
+            "total_bps_per_roundtrip": buy_bps + sell_bps,
+            "annualized_return": res.annualized_return,
+            "sharpe_ratio": res.sharpe_ratio,
+            "calmar_ratio": res.calmar_ratio,
+            "max_drawdown": res.max_drawdown,
+            "n_trades": res.n_trades,
+            "win_rate": res.win_rate,
+        })
+    return rows
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run backtests for every symbol in a watchlist.")
     parser.add_argument("--watchlist", required=True)
@@ -47,6 +107,7 @@ def main() -> int:
     parser.add_argument("--consensus", action="store_true", help="Use multi-mode consensus instead of one DK mode")
     parser.add_argument("--export-summary", required=True)
     parser.add_argument("--export-html", action="store_true")
+    parser.add_argument("--compare-costs", action="store_true", help="Run cost sensitivity analysis across all stocks")
     parser.add_argument("--config", help="Config file path")
     parser.add_argument("--duckdb-path", help="Override DuckDB path")
     parser.add_argument("--stock-name-cache", help="Override stock name CSV path")
@@ -108,6 +169,10 @@ def main() -> int:
                 "win_rate": res.win_rate,
                 "stop_loss_exits": res.stop_loss_exits,
                 "trailing_stop_exits": res.trailing_stop_exits,
+                "atr_stop_exits": res.atr_stop_exits,
+                "profit_lock_exits": res.profit_lock_exits,
+                "market_exit_exits": res.market_exit_exits,
+                "time_stop_exits": res.time_stop_exits,
             }
         )
 
@@ -117,6 +182,40 @@ def main() -> int:
     summary_df.to_csv(out, index=False)
     ok = sum(1 for r in rows if r.get("status") == "ok")
     print(f"已完成 {ok}/{len(rows)} 个标的，汇总写入 {out}")
+
+    if args.compare_costs:
+        cost_rows = []
+        selected_params = _params(cfg, selected_mode)
+        for symbol in symbols:
+            df = data[data["symbol"].astype(str) == symbol].copy()
+            if df.empty:
+                continue
+            stock_name = names.get(symbol, symbol)
+            kwargs = dict(base_kwargs)
+            kwargs["stock_name"] = stock_name
+            cost_rows.extend(
+                _cost_sensitivity_rows(symbol, df, selected_params, base_kwargs, stock_name)
+            )
+        cost_df = pd.DataFrame(cost_rows)
+        cost_path = out.parent / f"{out.stem}_cost_sensitivity.csv"
+        cost_df.to_csv(cost_path, index=False)
+        print(f"成本敏感性分析已写入 {cost_path}")
+
+        # Summarise Sharpe decay from zero-cost to real A-share
+        zero = cost_df[cost_df["scenario"] == "zero_cost"]
+        real = cost_df[cost_df["scenario"] == "real_ashare"]
+        if not zero.empty and not real.empty:
+            merged = zero.merge(real, on="symbol", suffixes=("_zero", "_real"))
+            merged["sharpe_decay"] = merged["sharpe_ratio_zero"] - merged["sharpe_ratio_real"]
+            avg_decay = merged["sharpe_decay"].mean()
+            n_high_decay = int((merged["sharpe_decay"] > 0.25).sum())
+            print(f"\n成本压力测试摘要：")
+            print(f"  平均 Sharpe 衰减（零成本→真实A股）：{avg_decay:.3f}")
+            print(f"  Sharpe 衰减 > 0.25 的标的数：{n_high_decay}/{len(merged)}")
+            if avg_decay > 0.25:
+                print(f"  ⚠️ 平均衰减超过 0.25，建议优先降低换手而非调参追收益")
+            else:
+                print(f"  ✅ 平均衰减在可接受范围")
 
     if args.export_html:
         ok_rows = [r for r in rows if r.get("status") == "ok"]

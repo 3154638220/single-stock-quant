@@ -47,4 +47,16 @@ def build_bt_kwargs(cfg: dict[str, Any], *, index_ohlcv: pd.DataFrame | None = N
         "stop_reentry_min_run": int(bt_cfg.get("stop_reentry_min_run", 2)),
         "min_quality_score": float(filt_cfg.get("min_quality_score", 0.0)),
         "quality_score_mode": str(filt_cfg.get("quality_score_mode", "hard")),
+        "quality_score_floor": float(filt_cfg.get("quality_score_floor", 0.3)),
+        # Phase 4.1 — exit optimisation
+        "time_stop_days": int(bt_cfg.get("time_stop_days", 0)),
+        "time_stop_min_return": float(bt_cfg.get("time_stop_min_return", 0.0)),
+        "profit_lock_trigger": float(bt_cfg.get("profit_lock_trigger", 0.0)),
+        "profit_lock_trailing": float(bt_cfg.get("profit_lock_trailing", 0.0)),
+        "market_exit_mode": str(bt_cfg.get("market_exit_mode", "off")),
+        # Phase 4.2 — volatility-target position sizing
+        "volatility_target_ann": float(bt_cfg.get("volatility_target_ann", 0.0)),
+        "volatility_lookback": int(bt_cfg.get("volatility_lookback", 20)),
+        # Phase 4.3 — drawdown throttle
+        "drawdown_throttle_enabled": bool(bt_cfg.get("drawdown_throttle_enabled", False)),
     }

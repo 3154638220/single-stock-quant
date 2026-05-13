@@ -15,6 +15,7 @@ class TrendMode(str, Enum):
     MACD_CROSS = "macd_cross"
     MA_CROSS = "ma_cross"
     BOLL_TREND = "boll_trend"
+    DONCHIAN_BREAKOUT = "donchian_breakout"
 
 
 @dataclass(frozen=True)
@@ -28,6 +29,8 @@ class DKTrendParams:
     ma_smooth: int = 3
     boll_window: int = 20
     min_run_len: int = 1
+    donchian_entry_window: int = 20
+    donchian_exit_window: int = 10
 
     @classmethod
     def from_mapping(cls, data: dict | None) -> "DKTrendParams":
@@ -43,6 +46,8 @@ class DKTrendParams:
             ma_smooth=int(d.get("ma_smooth", 3)),
             boll_window=int(d.get("boll_window", 20)),
             min_run_len=int(d.get("min_run_len", 1)),
+            donchian_entry_window=int(d.get("donchian_entry_window", 20)),
+            donchian_exit_window=int(d.get("donchian_exit_window", 10)),
         )
 
 

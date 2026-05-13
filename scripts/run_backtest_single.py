@@ -59,6 +59,7 @@ def _print_result(res, mode: str) -> None:
     print(f"  总交易次数：{res.n_trades}    胜率：{_pct(res.win_rate)}    平均持仓天数：{_num(res.avg_hold_days, 1)}")
     print(f"  单笔平均收益：{_signed_pct(res.avg_return_per_trade)}    最大连续盈利：{res.max_consecutive_wins}    最大连续亏损：{res.max_consecutive_losses}")
     print(f"  固定止损：{res.stop_loss_exits}    追踪止损：{res.trailing_stop_exits}    ATR止损：{res.atr_stop_exits}")
+    print(f"  盈利保护：{res.profit_lock_exits}    市场退出：{res.market_exit_exits}    时间止损：{res.time_stop_exits}")
     if not res.trade_log.empty:
         print()
         print("交易记录（最近 5 笔）：")

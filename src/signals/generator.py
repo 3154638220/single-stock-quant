@@ -85,32 +85,36 @@ def compute_signal_quality(
     atr_lookback: int = 60,
     market_returns: pd.Series | None = None,
     market_lookback: int = 10,
+    trend_strength_lookback: int = 5,
 ) -> pd.Series:
     """Score each BUY signal (0-100) based on confirming evidence.
 
-    Points:
-    - +20: color run_len >= 2
-    - +20: volume >= volume_ratio_min * avg volume
-    - +20: resonance count == 3 (if available)
-    - +20: market return > 0 over market_lookback
-    - +20: current ATR < median ATR over atr_lookback
+    Points (max 100):
+    - +15: color run_len >= 2
+    - +15: volume >= volume_ratio_min * avg volume
+    - +15: resonance count == 3 (if available)
+    - +10: market return > 0 over market_lookback
+    - +10: current ATR < median ATR over atr_lookback
+    - +10: close > MA20 (trend direction)
+    - +10: MA20 slope > 0 (trend momentum)
+    - +15: RS_60 > 0 (relative strength vs index)
     """
     scores = pd.Series(0.0, index=trend.index, dtype="float64")
     buy_mask = trend["dk_signal"] == "buy"
 
     # run_len >= 2
     run_len = trend.get("dk_run_len", pd.Series(0, index=trend.index))
-    scores.loc[buy_mask & (run_len >= 2)] += 20
+    scores.loc[buy_mask & (run_len >= 2)] += 15
 
     # volume confirmation
     if "volume" in trend.columns:
         vol = pd.to_numeric(trend["volume"], errors="coerce")
         avg_vol = vol.rolling(volume_lookback, min_periods=volume_lookback).mean()
-        scores.loc[buy_mask & (vol >= avg_vol * volume_ratio_min)] += 20
+        scores.loc[buy_mask & (vol >= avg_vol * volume_ratio_min)] += 15
 
     # resonance
     if "consensus_red_count" in trend.columns:
-        scores.loc[buy_mask & (trend["consensus_red_count"] >= 3)] += 20
+        scores.loc[buy_mask & (trend["consensus_red_count"] >= 3)] += 15
 
     # market regime
     if market_returns is not None and not market_returns.empty:
@@ -118,18 +122,42 @@ def compute_signal_quality(
         market_cum = (1.0 + aligned).rolling(market_lookback, min_periods=market_lookback).apply(
             lambda x: (x + 1.0).prod() - 1.0, raw=True
         )
-        scores.loc[buy_mask & (market_cum > 0)] += 20
+        scores.loc[buy_mask & (market_cum > 0)] += 10
+
+    # Extract close for trend-checks (used by ATR + trend-strength blocks below)
+    close = pd.to_numeric(trend["close"], errors="coerce") if "close" in trend.columns else pd.Series(dtype=float)
 
     # low-volatility entry (ATR below median)
     if all(c in trend.columns for c in ("high", "low", "close")):
         high = pd.to_numeric(trend["high"], errors="coerce")
         low = pd.to_numeric(trend["low"], errors="coerce")
-        close = pd.to_numeric(trend["close"], errors="coerce")
         prev_close = close.shift(1)
         tr = pd.concat([high - low, (high - prev_close).abs(), (low - prev_close).abs()], axis=1).max(axis=1)
         atr = tr.rolling(14, min_periods=14).mean()
         atr_median = atr.rolling(atr_lookback, min_periods=atr_lookback).median()
-        scores.loc[buy_mask & (atr < atr_median)] += 20
+        scores.loc[buy_mask & (atr < atr_median)] += 10
+
+    # trend direction: close > MA20
+    if close.notna().any():
+        ma20 = close.rolling(20, min_periods=20).mean()
+        scores.loc[buy_mask & (close > ma20)] += 10
+
+        # trend momentum: MA20 slope > 0
+        ma20_slope = ma20 - ma20.shift(trend_strength_lookback)
+        scores.loc[buy_mask & (ma20_slope > 0)] += 10
+
+        # relative strength: stock has outperformed index over 60 days
+        if market_returns is not None and not market_returns.empty:
+            stock_ret_60 = close.pct_change(60)
+            aligned_idx = market_returns.reindex(trend.index).fillna(0.0)
+            idx_cum_60 = (1.0 + aligned_idx).rolling(60, min_periods=60).apply(
+                lambda x: (x + 1.0).prod() - 1.0, raw=True
+            )
+            scores.loc[buy_mask & (stock_ret_60 > idx_cum_60)] += 15
+        else:
+            # Without index, reward positive 60-day return as a proxy
+            stock_ret_60 = close.pct_change(60)
+            scores.loc[buy_mask & (stock_ret_60 > 0)] += 15
 
     return scores.clip(upper=100.0)
 
