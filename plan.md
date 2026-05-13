@@ -842,3 +842,32 @@ python -m py_compile scripts/run_signal.py scripts/run_backtest_single.py
 ```
 
 备注：直接运行 `fetch_stock.py` 时，当前沙箱网络无法访问 Sina / Eastmoney，报 `Operation not permitted`；本轮真实链路验收已使用复制到当前项目的本地 DuckDB 完成。`data/` 已在 `.gitignore` 中，复制的 2.4G 数据库不会进入版本控制。
+
+2026-05-13 本轮继续推进（数据质量门禁）：
+
+1. `scripts/fetch_stock.py`：`--check-quality` 的近端摘要抽成 `RecentQualitySummary`，统一统计最近 N 条日线的行数、日期区间、最新收盘、最大自然日间隔、OHLCV 缺失数和 OHLC 异常数。
+2. `scripts/fetch_stock.py`：新增 `--fail-on-quality`，质量不达标时返回退出码 `2`；新增 `--quality-window`、`--quality-min-rows`、`--quality-max-gap-days`、`--quality-allow-nulls`、`--quality-allow-invalid-ohlc`，用于控制“失败即退出”的阈值。
+3. `README.md`：补充数据拉取后的质量门禁示例。
+4. `tests/test_fetch_stock_quality.py`：新增近端质量摘要与阈值判断回归测试。
+
+2026-05-13 本轮继续推进（旧兼容 schema 收敛）：
+
+1. `src/data_fetcher/db_manager.py`：历史 migrations 改为显式开关 `database.apply_legacy_migrations`，默认不再为新 DuckDB 创建旧月度研究表。
+2. `config.yaml.example` / `src/settings.py`：新增 `database.apply_legacy_migrations: false` 默认值。
+3. `src/event_log.py`：新增 `ensure_event_log_schema()`，事件日志首次写入/查询前自行确保 `run_events` 表存在，不再依赖旧 migrations v8。
+4. `tests/test_db_manager_schema.py`：验证默认新库只创建日线与审计核心表，不创建 `schema_migrations` / `oos_tracking`。
+5. `tests/test_event_log.py`：验证空 DuckDB 连接上可直接写入并查询趋势信号事件。
+
+本轮验收：
+
+```bash
+pytest
+# 19 passed, 1 warning
+
+python -m py_compile scripts/run_signal.py scripts/run_backtest_single.py src/settings.py src/data_fetcher/db_manager.py src/event_log.py
+# passed
+
+python scripts/fetch_stock.py --help
+python scripts/run_signal.py --help
+# passed
+```

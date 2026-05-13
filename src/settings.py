@@ -131,6 +131,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "table_daily": "a_share_daily",
         "table_audit": "data_fetch_audit",
         "auto_backfill_derived_on_init": True,
+        "apply_legacy_migrations": False,
     },
     "quality": {
         "max_calendar_gap_days": 20,

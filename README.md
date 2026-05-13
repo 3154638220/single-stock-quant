@@ -50,7 +50,18 @@ Fetch one or more stocks:
 
 ```bash
 python scripts/fetch_stock.py --symbols 600930 000001 300750
+python scripts/fetch_stock.py --symbol 600930 --check-quality --fail-on-quality --quality-min-rows 20
 ```
+
+`--fail-on-quality` turns the recent-data summary into a gate. It exits with
+code `2` when the selected window has too few rows, a calendar gap above
+`quality.max_calendar_gap_days` (or `--quality-max-gap-days`), OHLCV nulls, or
+invalid OHLC rows. Use `--quality-allow-nulls` or
+`--quality-allow-invalid-ohlc` only when you intentionally want a soft check.
+
+New DuckDB files create only the daily data and fetch-audit tables by default.
+Set `database.apply_legacy_migrations: true` only when you need old research
+tables from a previous version of the project.
 
 Show the latest signal:
 

@@ -13,7 +13,7 @@
         "action": "buy_delayed",
     }, run_id="signal_20260428")
 
-表结构（由 src.data_fetcher.migrations v8 创建）::
+表结构会在首次写入或查询前自动确保存在::
 
     CREATE TABLE IF NOT EXISTS run_events (
         event_id BIGINT PRIMARY KEY DEFAULT nextval('seq_run_events_id'),
@@ -36,6 +36,26 @@ from typing import Any
 import duckdb
 
 _LOG = logging.getLogger(__name__)
+
+
+def ensure_event_log_schema(conn: duckdb.DuckDBPyConnection) -> None:
+    """Ensure the lightweight event log table exists in the current DuckDB file."""
+    conn.execute("CREATE SEQUENCE IF NOT EXISTS seq_run_events_id START 1")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS run_events (
+            event_id BIGINT PRIMARY KEY DEFAULT nextval('seq_run_events_id'),
+            run_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            event_type VARCHAR NOT NULL,
+            event_payload JSON,
+            run_id VARCHAR,
+            symbol VARCHAR,
+            signal_date DATE
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_run_events_type ON run_events(event_type)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_run_events_ts ON run_events(run_ts)")
 
 # ── 事件类型枚举 ─────────────────────────────────────────────────────────
 
@@ -83,6 +103,7 @@ def log_event(
         写入成功返回 True，异常返回 False。
     """
     try:
+        ensure_event_log_schema(conn)
         payload_json = json.dumps(payload, ensure_ascii=False) if payload else None
         conn.execute(
             """
@@ -162,6 +183,7 @@ def query_events(
     """
 
     try:
+        ensure_event_log_schema(conn)
         rows = conn.execute(q, params).fetchall()
     except Exception as exc:
         _LOG.warning("查询事件日志失败: %s", exc)

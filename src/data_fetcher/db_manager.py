@@ -78,6 +78,7 @@ class DuckDBManager:
         self._daily_allow_fallback = bool(ak_cfg.get("daily_allow_fallback", True))
         self._backfill_derived_after_fetch = bool(ak_cfg.get("backfill_derived_after_fetch", False))
         self._auto_backfill_derived_on_init = bool(db_cfg.get("auto_backfill_derived_on_init", True))
+        self._apply_legacy_migrations = bool(db_cfg.get("apply_legacy_migrations", False))
 
         logs_dir = paths.get("logs_dir", "data/logs")
         ld = Path(logs_dir)
@@ -96,8 +97,8 @@ class DuckDBManager:
         self._ensure_schema()
         self._ensure_audit_schema()
         self._auto_backfill_derived_columns_if_needed()
-        # P2-10: 自动执行 schema migration（per docs/plan-05-04.md E2）
-        self._apply_pending_migrations()
+        if self._apply_legacy_migrations:
+            self._apply_pending_migrations()
         self._last_fetch_run_id: Optional[str] = None
 
     def _append_fetch_failure_log(self, symbol: str, exc: BaseException) -> None:
@@ -158,7 +159,7 @@ class DuckDBManager:
         )
 
     def _apply_pending_migrations(self) -> None:
-        """P2-10: 自动执行 DuckDB schema migration（per docs/plan-05-04.md E2）。"""
+        """Apply legacy DuckDB schema migrations when explicitly enabled."""
         try:
             from .migrations import apply_migrations
             applied = apply_migrations(self._conn)
