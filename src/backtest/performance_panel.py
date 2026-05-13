@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass
 from typing import Any, Mapping, Optional
 
 import numpy as np
+import pandas as pd
 
 from src.backtest.risk_metrics import max_drawdown_from_returns
 
@@ -303,8 +304,8 @@ def aggregate_panels(
 
 
 def breakdown_by_regime(
-    strategy_returns: np.ndarray,
-    index_returns: np.ndarray | None = None,
+    strategy_returns,
+    index_returns=None,
     *,
     regime_lookback: int = 60,
     bull_threshold: float = 0.10,
@@ -313,15 +314,25 @@ def breakdown_by_regime(
 ) -> dict[str, Any]:
     """Split strategy performance by market regime based on index rolling return.
 
-    Returns a dict with per-regime metrics suitable for display.
+    Accepts ``np.ndarray`` (positional) or ``pd.Series`` with a ``DatetimeIndex``.
+    When both are ``pd.Series`` they are inner-joined on date before computing
+    regimes, preventing date misalignment.
     """
-    sr = np.asarray(strategy_returns, dtype=np.float64).ravel()
-    if index_returns is not None:
-        ir = np.asarray(index_returns, dtype=np.float64).ravel()
-        if len(ir) != len(sr):
-            ir = np.full(len(sr), np.nan)
+    if isinstance(strategy_returns, pd.Series) and isinstance(index_returns, pd.Series):
+        aligned = pd.concat([strategy_returns, index_returns], axis=1, join="inner").dropna()
+        if aligned.shape[1] < 2:
+            return {"error": "no_overlapping_index_data"}
+        sr = aligned.iloc[:, 0].to_numpy(dtype=np.float64)
+        ir = aligned.iloc[:, 1].to_numpy(dtype=np.float64)
     else:
-        ir = np.full(len(sr), np.nan)
+        sr = np.asarray(strategy_returns, dtype=np.float64).ravel()
+        if index_returns is not None:
+            ir = np.asarray(index_returns, dtype=np.float64).ravel()
+            if len(ir) != len(sr):
+                ir = np.full(len(sr), np.nan)
+        else:
+            ir = np.full(len(sr), np.nan)
+
     n = min(len(sr), len(ir))
     if n < regime_lookback + 2:
         return {"error": f"not enough data ({n} rows, need {regime_lookback + 2})"}
@@ -329,11 +340,19 @@ def breakdown_by_regime(
     sr = sr[:n]
     ir = ir[:n]
 
+    # If index data was explicitly provided but is all-NaN after alignment,
+    # signal a data problem rather than silently classifying as ranging.
+    if index_returns is not None and np.all(np.isnan(ir)):
+        return {"error": "no_index_data"}
+
     # Compute rolling 60-day return on index
     cum_idx = np.cumprod(1.0 + np.nan_to_num(ir, nan=0.0))
     regime = np.full(n, "ranging", dtype=object)
     for i in range(regime_lookback, n):
-        roll_ret = cum_idx[i] / cum_idx[i - regime_lookback] - 1.0
+        denom = cum_idx[i - regime_lookback]
+        if denom <= 0 or not np.isfinite(denom):
+            continue
+        roll_ret = cum_idx[i] / denom - 1.0
         if np.isfinite(roll_ret):
             if roll_ret > bull_threshold:
                 regime[i] = "bull"

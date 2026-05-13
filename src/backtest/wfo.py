@@ -22,7 +22,25 @@ DEFAULT_PARAM_GRID: dict[str, list] = {
     "stop_loss_pct": [0.05, 0.08, 0.10],
 }
 
-_BT_PARAM_KEYS = {"stop_loss_pct", "atr_stop_multiplier", "trailing_stop_pct"}
+_BT_PARAM_KEYS = {
+    "stop_loss_pct", "trailing_stop_pct", "atr_stop_multiplier", "atr_stop_period",
+    "volume_confirm", "volume_lookback", "volume_ratio_min",
+    "risk_per_trade_pct", "position_size_cap",
+    "stop_reentry_enabled", "stop_reentry_cooldown", "stop_reentry_min_run",
+    "min_quality_score",
+}
+
+# All kwargs that run_single_stock_backtest accepts (beyond cost_bps, cost_params, initial_capital).
+_VALID_BT_KWARGS = {
+    "stock_name", "volume_confirm", "volume_lookback", "volume_ratio_min",
+    "consensus_n_agree", "enable_index_filter", "index_ohlcv",
+    "benchmark_symbol", "extreme_lookback_days", "extreme_drop_threshold",
+    "risk_off_factor", "stop_loss_pct", "trailing_stop_pct",
+    "atr_stop_multiplier", "atr_stop_period", "risk_per_trade_pct",
+    "position_size_cap", "stop_reentry_enabled", "stop_reentry_cooldown",
+    "stop_reentry_min_run", "cost_params",
+    "min_quality_score", "quality_score_mode",
+}
 
 
 def _param_combinations(grid: dict[str, list[Any]]) -> list[dict[str, Any]]:
@@ -138,7 +156,7 @@ def run_walk_forward_optimization(
                 params,
                 cost_bps=cost_bps,
                 initial_capital=initial_capital,
-                **{k: v for k, v in bt.items() if k in ("stop_loss_pct", "trailing_stop_pct", "atr_stop_multiplier", "atr_stop_period")},
+                **{k: v for k, v in bt.items() if k in _VALID_BT_KWARGS},
             )
             score = res.sharpe_ratio if np.isfinite(res.sharpe_ratio) else -np.inf
             if score > best_sharpe:
@@ -154,7 +172,7 @@ def run_walk_forward_optimization(
             selected,
             cost_bps=cost_bps,
             initial_capital=initial_capital,
-            **{k: v for k, v in bt_final.items() if k in ("stop_loss_pct", "trailing_stop_pct", "atr_stop_multiplier", "atr_stop_period")},
+            **{k: v for k, v in bt_final.items() if k in _VALID_BT_KWARGS},
         )
         panel = compute_performance_panel(
             oos_res.daily_returns.to_numpy(dtype=np.float64),

@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from src.backtest.config import build_bt_kwargs
 from src.backtest.wfo import run_walk_forward_optimization
 from src.data_fetcher.db_manager import DuckDBManager
 from src.indicators import DKTrendParams, TrendMode
@@ -41,13 +42,17 @@ def main() -> int:
     args = parser.parse_args()
 
     cfg = load_config(args.config)
-    bt_cfg = cfg.get("backtest", {}) or {}
     wfo_cfg = cfg.get("wfo", {}) or {}
     symbol = str(args.symbol).strip().zfill(6)
     with DuckDBManager(config_path=args.config, duckdb_path=args.duckdb_path) as db:
         df = db.read_daily_frame(symbols=[symbol], start=args.start, end=args.end)
     if df.empty:
         raise SystemExit("no daily data found; run scripts/fetch_stock.py first")
+
+    bt_kwargs = build_bt_kwargs(cfg)
+    # WFO search overrides the base trend mode; clear consensus if not in grid.
+    if cfg.get("trend_signal", {}).get("mode") != "consensus":
+        bt_kwargs["consensus_n_agree"] = None
 
     result = run_walk_forward_optimization(
         symbol,
@@ -58,14 +63,9 @@ def main() -> int:
         oos_days=args.oos_days,
         mode=args.mode,
         window=args.window,
-        cost_bps=float(bt_cfg.get("cost_bps", 15.0)),
-        initial_capital=float(bt_cfg.get("initial_capital", 100000)),
-        bt_kwargs={
-            "stop_loss_pct": float(bt_cfg.get("stop_loss_pct", 0.0)),
-            "trailing_stop_pct": float(bt_cfg.get("trailing_stop_pct", 0.0)),
-            "atr_stop_multiplier": float(bt_cfg.get("atr_stop_multiplier", 0.0)),
-            "atr_stop_period": int(bt_cfg.get("atr_stop_period", 14)),
-        },
+        cost_bps=bt_kwargs.pop("cost_bps"),
+        initial_capital=bt_kwargs.pop("initial_capital"),
+        bt_kwargs=bt_kwargs,
     )
 
     agg = result["aggregated"]

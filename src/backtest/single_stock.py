@@ -11,9 +11,9 @@ from src.backtest.performance_panel import annualized_return_cagr, compute_perfo
 from src.backtest.risk_metrics import risk_off_multiplier_from_index
 from src.backtest.transaction_costs import TransactionCostParams, cost_params_dict_for_logging
 from src.indicators import DKTrendParams, compute_dktrend
-from src.market.tradability import is_open_limit_up_unbuyable, is_row_suspended_like
+from src.market.tradability import is_open_limit_down_unsellable, is_open_limit_up_unbuyable, is_row_suspended_like
 from src.signals.consensus import compute_consensus_trend
-from src.signals.generator import apply_volume_confirmation
+from src.signals.generator import apply_volume_confirmation, compute_signal_quality
 
 
 @dataclass(frozen=True)
@@ -102,10 +102,15 @@ def _next_buy_index(df: pd.DataFrame, symbol: str, start_idx: int) -> int | None
     return None
 
 
-def _next_sell_index(df: pd.DataFrame, start_idx: int) -> int | None:
+def _next_sell_index(df: pd.DataFrame, start_idx: int, symbol: str = "") -> int | None:
     for j in range(start_idx, len(df)):
-        if _is_tradable_open(df, j):
-            return j
+        if not _is_tradable_open(df, j):
+            continue
+        prev_close = float(df.loc[j - 1, "close"]) if j > 0 else np.nan
+        open_px = float(df.loc[j, "open"])
+        if symbol and is_open_limit_down_unsellable(open_px, prev_close, symbol):
+            continue
+        return j
     return None
 
 
@@ -121,7 +126,7 @@ def _max_consecutive(values: list[bool], target: bool) -> int:
 
 
 def _future_exit_index(actions: dict[int, str], start_idx: int) -> int | None:
-    exits = [idx for idx, action in actions.items() if idx >= start_idx and action in {"sell", "stop_loss", "trailing_stop"}]
+    exits = [idx for idx, action in actions.items() if idx >= start_idx and action in {"sell", "stop_loss", "trailing_stop", "atr_stop"}]
     return min(exits) if exits else None
 
 
@@ -214,11 +219,21 @@ def run_single_stock_backtest(
     stop_reentry_enabled: bool = False,
     stop_reentry_cooldown: int = 3,
     stop_reentry_min_run: int = 2,
+    trend_override: pd.DataFrame | None = None,
+    min_quality_score: float = 0.0,
+    quality_score_mode: str = "hard",
 ) -> SingleStockBacktestResult:
-    """Backtest one stock with T+1 open execution and single-position long/flat state."""
+    """Backtest one stock with T+1 open execution and single-position long/flat state.
+
+    If *trend_override* is provided it must be a DataFrame with at minimum a
+    ``dk_signal`` column aligned to the same length as *ohlcv*; it completely
+    replaces the on-the-fly DK-trend computation (useful for permutation tests).
+    """
     code = str(symbol).strip().zfill(6)
     df = _prepare_ohlcv(ohlcv)
-    if consensus_n_agree is not None and int(consensus_n_agree) > 1:
+    if trend_override is not None:
+        trend = trend_override.reset_index(drop=True)
+    elif consensus_n_agree is not None and int(consensus_n_agree) > 1:
         trend = compute_consensus_trend(
             df,
             base_params=params,
@@ -244,7 +259,38 @@ def run_single_stock_backtest(
         buy_frac = c
         sell_frac = c
         cost_model_dict = {"type": "symmetric", "cost_bps": float(cost_bps)}
+
+    # ── Trade attribution pre-computation ──
+    _attr_quality = compute_signal_quality(trend).reset_index(drop=True)
+    _attr_atr14 = _compute_atr(df, 14)
+    _attr_close = pd.to_numeric(df["close"], errors="coerce")
+    _attr_atr_pct = _attr_atr14 / _attr_close
+    _attr_vol = pd.to_numeric(df["volume"], errors="coerce")
+    _attr_avg_vol = _attr_vol.rolling(window=volume_lookback, min_periods=volume_lookback).mean()
+    _attr_vol_ratio = _attr_vol / _attr_avg_vol
+    _attr_stock_ret60 = _attr_close.pct_change(60)
+    _attr_regime = pd.Series("unknown", index=df.index, dtype=object)
+    _attr_rs_60 = pd.Series(np.nan, index=df.index, dtype=np.float64)
+    _attr_idx_ret60 = pd.Series(np.nan, index=df.index, dtype=np.float64)
+    if index_ohlcv is not None and not index_ohlcv.empty:
+        idx_dates = pd.to_datetime(index_ohlcv["trade_date"]).dt.normalize()
+        idx_close = pd.to_numeric(index_ohlcv["close"], errors="coerce")
+        idx_ret = idx_close.pct_change(60)
+        idx_map = dict(zip(idx_dates, idx_ret))
+        stock_dates = pd.to_datetime(df["trade_date"]).dt.normalize()
+        for _j, _d in enumerate(stock_dates):
+            _v = idx_map.get(_d)
+            if _v is not None and np.isfinite(_v):
+                _attr_idx_ret60.iloc[_j] = _v
+        _attr_regime = _attr_idx_ret60.apply(
+            lambda x: "bull" if x > 0.10 else ("bear" if x < -0.10 else "ranging") if pd.notna(x) else "unknown"
+        )
+        _attr_rs_60 = _attr_stock_ret60 - _attr_idx_ret60
+    else:
+        _attr_rs_60 = _attr_stock_ret60
+
     actions: dict[int, str] = {}
+    entry_meta: dict[int, dict] = {}
     planned_long = False
     pending_buy_idx: int | None = None
     for i, row in trend.iterrows():
@@ -262,13 +308,23 @@ def run_single_stock_backtest(
                 risk_off_factor=risk_off_factor,
             ):
                 continue
+            _q = float(_attr_quality.iloc[i]) if i < len(_attr_quality) else 0.0
+            if min_quality_score > 0 and quality_score_mode == "hard" and _q < min_quality_score:
+                continue
             j = _next_buy_index(df, code, i + 1)
             if j is None:
                 continue
             actions.setdefault(j, "buy")
             pending_buy_idx = j
+            entry_meta[j] = {
+                "quality": float(_attr_quality.iloc[i]) if i < len(_attr_quality) else 0.0,
+                "vol_ratio": float(_attr_vol_ratio.iloc[i]) if i < len(_attr_vol_ratio) and np.isfinite(_attr_vol_ratio.iloc[i]) else float("nan"),
+                "atr_pct": float(_attr_atr_pct.iloc[i]) if i < len(_attr_atr_pct) and np.isfinite(_attr_atr_pct.iloc[i]) else float("nan"),
+                "regime": str(_attr_regime.iloc[i]) if i < len(_attr_regime) else "unknown",
+                "rs_60": float(_attr_rs_60.iloc[i]) if i < len(_attr_rs_60) and np.isfinite(_attr_rs_60.iloc[i]) else float("nan"),
+            }
         elif sig == "sell" and planned_long and i + 1 < len(df):
-            j = _next_sell_index(df, i + 1)
+            j = _next_sell_index(df, i + 1, code)
             if j is None:
                 continue
             actions.setdefault(j, "sell")
@@ -334,6 +390,14 @@ def run_single_stock_backtest(
                 entry_date = pd.Timestamp(df.loc[i, "trade_date"])
                 entry_price = price
                 highest_close = float(df.loc[i, "close"])
+                _meta = entry_meta.get(i, {})
+                entry_quality = float(_meta.get("quality", 0.0))
+                entry_vol_ratio = float(_meta.get("vol_ratio", float("nan")))
+                entry_atr_pct_val = float(_meta.get("atr_pct", float("nan")))
+                entry_regime = str(_meta.get("regime", "unknown"))
+                entry_rs_60_val = float(_meta.get("rs_60", float("nan")))
+                mae = 0.0
+                mfe = 0.0
                 if atr_stop_mult > 0 and not atr_series.empty:
                     atr_val2 = float(atr_series.iloc[i])
                     if np.isfinite(atr_val2) and atr_val2 > 0:
@@ -342,7 +406,7 @@ def run_single_stock_backtest(
                         atr_stop_price = float("nan")
                 elif atr_stop_mult <= 0:
                     atr_stop_price = float("nan")
-        elif action in {"sell", "stop_loss", "trailing_stop"} and in_pos:
+        elif action in {"sell", "stop_loss", "trailing_stop", "atr_stop"} and in_pos:
             price = float(df.loc[i, "open"])
             if price <= 0 or not np.isfinite(price):
                 continue
@@ -359,15 +423,26 @@ def run_single_stock_backtest(
                     "hold_days": int((exit_date - entry_date).days),
                     "return": ret,
                     "exit_reason": action if action != "sell" else "signal",
+                    "entry_quality_score": entry_quality,
+                    "entry_volume_ratio": entry_vol_ratio,
+                    "entry_atr_pct": entry_atr_pct_val,
+                    "entry_market_regime": entry_regime,
+                    "entry_rs_60": entry_rs_60_val,
+                    "mae": mae,
+                    "mfe": mfe,
                 }
             )
             in_pos = False
             highest_close = float("nan")
-            if reentry_enabled and action in {"stop_loss", "atr_stop", "trailing_stop"}:
+            if reentry_enabled and action in {"stop_loss", "trailing_stop", "atr_stop"}:
                 cooldown_remaining = reentry_cooldown
         equity[i] = shares * float(df.loc[i, "close"]) if in_pos else cash
         if in_pos:
             close_px = float(df.loc[i, "close"])
+            if np.isfinite(close_px) and np.isfinite(entry_price) and entry_price > 0:
+                pnl = close_px / entry_price - 1.0
+                mae = min(mae, pnl)
+                mfe = max(mfe, pnl)
             if np.isfinite(close_px):
                 highest_close = close_px if not np.isfinite(highest_close) else max(highest_close, close_px)
             forced_reason = ""
@@ -378,7 +453,7 @@ def run_single_stock_backtest(
             elif trailing_stop > 0 and np.isfinite(close_px) and np.isfinite(highest_close) and close_px / highest_close - 1.0 < -trailing_stop:
                 forced_reason = "trailing_stop"
             if forced_reason and i + 1 < len(df):
-                j = _next_sell_index(df, i + 1)
+                j = _next_sell_index(df, i + 1, code)
                 existing = _future_exit_index(actions, i + 1)
                 if j is not None and (existing is None or j < existing):
                     actions[j] = forced_reason
@@ -423,6 +498,13 @@ def run_single_stock_backtest(
                 "hold_days": int((exit_date - entry_date).days),
                 "return": ret,
                 "exit_reason": "end",
+                "entry_quality_score": entry_quality,
+                "entry_volume_ratio": entry_vol_ratio,
+                "entry_atr_pct": entry_atr_pct_val,
+                "entry_market_regime": entry_regime,
+                "entry_rs_60": entry_rs_60_val,
+                "mae": mae,
+                "mfe": mfe,
             }
         )
         in_pos = False

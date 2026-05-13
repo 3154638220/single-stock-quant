@@ -54,3 +54,29 @@ def is_row_suspended_like(
     if not np.isfinite(volume) or volume <= 0:
         return True
     return False
+
+
+def limit_down_ratio(symbol: str) -> float:
+    """跌停幅度比例（与涨停对称）。"""
+    return limit_up_ratio(symbol)
+
+
+def limit_down_px(prev_close: float, symbol: str) -> float:
+    """跌停价。"""
+    pc = float(prev_close)
+    r = limit_down_ratio(symbol)
+    return pc * (1.0 - r)
+
+
+def is_open_limit_down_unsellable(
+    open_px: float,
+    prev_close: float,
+    symbol: str,
+    *,
+    rel_tol: float = 1e-4,
+) -> bool:
+    """一字跌停开盘：开盘价触及跌停价，散户无法按开盘价卖出。"""
+    if not np.isfinite(open_px) or not np.isfinite(prev_close) or prev_close <= 0:
+        return True
+    lim = limit_down_px(prev_close, symbol)
+    return open_px <= lim * (1.0 + rel_tol)

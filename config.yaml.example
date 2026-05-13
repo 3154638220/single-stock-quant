@@ -40,6 +40,7 @@ trend_signal:
   ma_slow: 20
   ma_smooth: 3
   boll_window: 20
+  min_run_len: 1
 
 signal_filter:
   volume_confirm: false
@@ -52,12 +53,26 @@ backtest:
   execution: tplus1_open
   stop_loss_pct: 0.0
   trailing_stop_pct: 0.0
+  atr_stop_multiplier: 0.0
+  atr_stop_period: 14
+  risk_per_trade_pct: 0.0
+  position_size_cap: 1.0
+  stop_reentry_enabled: false
+  stop_reentry_cooldown: 3
+  stop_reentry_min_run: 2
+  transaction_cost:
+    commission_buy_bps: 2.5
+    commission_sell_bps: 2.5
+    slippage_bps_per_side: 2.0
+    stamp_duty_sell_bps: 5.0
 
 wfo:
   param_grid:
     macd_fast: [8, 10, 12, 14]
     macd_slow: [22, 26, 30]
     macd_signal: [7, 9, 11]
+    min_run_len: [1, 2, 3]
+    stop_loss_pct: [0.05, 0.08, 0.10]
 
 risk:
   enable_index_filter: false

@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from src.backtest.config import build_bt_kwargs
 from src.backtest.single_stock import run_single_stock_backtest
 from src.data_fetcher.db_manager import DuckDBManager
 from src.data_fetcher.stock_name_cache import resolve_stock_name_cache_path, resolve_stock_names
@@ -52,8 +53,7 @@ def main() -> int:
     args = parser.parse_args()
 
     cfg = load_config(args.config)
-    bt_cfg = cfg.get("backtest", {}) or {}
-    filt_cfg = cfg.get("signal_filter", {}) or {}
+    risk_cfg = cfg.get("risk", {}) or {}
     trend_cfg = cfg.get("trend_signal", {}) or {}
     configured_mode = str(trend_cfg.get("mode", "macd_cross"))
     use_consensus = args.consensus or (configured_mode == "consensus" and args.mode is None)
@@ -62,10 +62,21 @@ def main() -> int:
     name_cache_path = Path(args.stock_name_cache).expanduser() if args.stock_name_cache else resolve_stock_name_cache_path(cfg)
     names = resolve_stock_names(symbols, name_cache_path)
 
+    enable_index_filter = bool(risk_cfg.get("enable_index_filter", False))
+    benchmark_symbol = str(risk_cfg.get("benchmark_symbol", "510300")).strip().zfill(6)
+    symbols_to_read = list(symbols)
+    if enable_index_filter and benchmark_symbol not in symbols_to_read:
+        symbols_to_read.append(benchmark_symbol)
+
     with DuckDBManager(config_path=args.config, duckdb_path=args.duckdb_path) as db:
-        data = db.read_daily_frame(symbols=symbols, start=args.start, end=args.end)
+        data = db.read_daily_frame(symbols=symbols_to_read, start=args.start, end=args.end)
     if data.empty:
         raise SystemExit("no daily data found; run scripts/fetch_stock.py first")
+
+    index_df = data[data["symbol"].astype(str) == benchmark_symbol].copy() if enable_index_filter and benchmark_symbol in set(data.get("symbol", [])) else None
+    base_kwargs = build_bt_kwargs(cfg, index_ohlcv=index_df)
+    if not use_consensus:
+        base_kwargs["consensus_n_agree"] = None
 
     rows = []
     for symbol in symbols:
@@ -73,26 +84,13 @@ def main() -> int:
         if df.empty:
             rows.append({"symbol": symbol, "stock_name": names.get(symbol, symbol), "status": "no_data"})
             continue
+        kwargs = dict(base_kwargs)
+        kwargs["stock_name"] = names.get(symbol, symbol)
         res = run_single_stock_backtest(
             symbol,
             df,
             _params(cfg, selected_mode),
-            cost_bps=float(bt_cfg.get("cost_bps", 15.0)),
-            initial_capital=float(bt_cfg.get("initial_capital", 100000)),
-            stock_name=names.get(symbol, symbol),
-            volume_confirm=bool(filt_cfg.get("volume_confirm", False)),
-            volume_lookback=int(filt_cfg.get("volume_lookback", 20)),
-            volume_ratio_min=float(filt_cfg.get("volume_ratio_min", 1.0)),
-            consensus_n_agree=int(trend_cfg.get("consensus_n_agree", 2)) if use_consensus else None,
-            stop_loss_pct=float(bt_cfg.get("stop_loss_pct", 0.0)),
-            trailing_stop_pct=float(bt_cfg.get("trailing_stop_pct", 0.0)),
-            atr_stop_multiplier=float(bt_cfg.get("atr_stop_multiplier", 0.0)),
-            atr_stop_period=int(bt_cfg.get("atr_stop_period", 14)),
-            risk_per_trade_pct=float(bt_cfg.get("risk_per_trade_pct", 0.0)),
-            position_size_cap=float(bt_cfg.get("position_size_cap", 1.0)),
-            stop_reentry_enabled=bool(bt_cfg.get("stop_reentry_enabled", False)),
-            stop_reentry_cooldown=int(bt_cfg.get("stop_reentry_cooldown", 3)),
-            stop_reentry_min_run=int(bt_cfg.get("stop_reentry_min_run", 2)),
+            **kwargs,
         )
         rows.append(
             {
