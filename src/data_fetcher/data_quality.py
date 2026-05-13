@@ -1,12 +1,11 @@
-"""数据质量检查：日线表与新数据家族（资金流 / 股东人数）。"""
+"""数据质量检查：日线表与复权跳变。"""
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 import duckdb
-import numpy as np
 import pandas as pd
 
 
@@ -53,57 +52,6 @@ class QualityReport:
             f"null_violations={len(self.null_ratio_violations)}",
         ]
         return "; ".join(parts)
-
-
-@dataclass
-class FundFlowQualityReport:
-    ok: bool
-    table_exists: bool
-    total_rows: int = 0
-    distinct_symbols: int = 0
-    min_trade_date: Optional[str] = None
-    max_trade_date: Optional[str] = None
-    duplicate_pk_rows: int = 0
-    rows_without_daily_match: int = 0
-    rows_after_daily_max_date: int = 0
-    rows_without_daily_match_within_daily_span: int = 0
-    rows_without_daily_match_absent_symbols: int = 0
-    rows_without_daily_match_known_symbols: int = 0
-    absent_symbol_count: int = 0
-    daily_max_trade_date: Optional[str] = None
-    all_zero_flow_rows: int = 0
-    null_ratio_by_col: Dict[str, float] = field(default_factory=dict)
-    coverage_ratio_vs_daily: Optional[float] = None
-    median_symbols_per_day: float = 0.0
-    p10_symbols_per_day: float = 0.0
-    notes: List[str] = field(default_factory=list)
-
-    def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
-
-
-@dataclass
-class ShareholderQualityReport:
-    ok: bool
-    table_exists: bool
-    total_rows: int = 0
-    distinct_symbols: int = 0
-    distinct_end_dates: int = 0
-    min_end_date: Optional[str] = None
-    max_end_date: Optional[str] = None
-    duplicate_pk_rows: int = 0
-    notice_date_coverage_ratio: float = 0.0
-    fallback_lag_usage_ratio: float = 0.0
-    negative_notice_lag_rows: int = 0
-    median_notice_lag_days: Optional[float] = None
-    p90_notice_lag_days: Optional[float] = None
-    median_symbols_per_end_date: float = 0.0
-    p10_symbols_per_end_date: float = 0.0
-    effective_factor_dates_ge_min_width: int = 0
-    notes: List[str] = field(default_factory=list)
-
-    def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
 
 
 def _duplicate_pk_count(conn: duckdb.DuckDBPyConnection, table: str) -> int:
@@ -174,14 +122,6 @@ def _large_gap_count(
 def _describe_column_names(conn: duckdb.DuckDBPyConnection, table: str) -> set[str]:
     rows = conn.execute(f"DESCRIBE {table}").fetchall()
     return {str(r[0]) for r in rows}
-
-
-def _table_exists(conn: duckdb.DuckDBPyConnection, table: str) -> bool:
-    row = conn.execute(
-        "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = ?",
-        [table],
-    ).fetchone()
-    return bool(row and int(row[0] or 0) > 0)
 
 
 def _null_ratio_checks(
@@ -326,237 +266,6 @@ def validate_daily_frame(df: pd.DataFrame, *, cfg: Optional[QualityConfig] = Non
         ohlc_invalid_rows=ohlc_n,
         large_gap_rows=0,
         null_ratio_violations=null_v,
-        notes=notes,
-    )
-
-
-def run_fund_flow_quality_checks(
-    conn: duckdb.DuckDBPyConnection,
-    *,
-    table: str = "a_share_fund_flow",
-    daily_table: str = "a_share_daily",
-) -> FundFlowQualityReport:
-    """
-    资金流数据质量检查。
-
-    关注项：
-    - 表覆盖率与截面宽度
-    - 关键列空值率
-    - 与日线表的时间戳错位
-    - 重复主键与可疑全零行
-    """
-    if not _table_exists(conn, table):
-        return FundFlowQualityReport(ok=False, table_exists=False, notes=[f"表不存在: {table}"])
-
-    raw = conn.execute(
-        f"""
-        SELECT
-            symbol,
-            trade_date,
-            main_net_inflow_pct,
-            super_large_net_inflow_pct,
-            small_net_inflow_pct
-        FROM {table}
-        """
-    ).df()
-    if raw.empty:
-        return FundFlowQualityReport(ok=False, table_exists=True, notes=[f"表为空: {table}"])
-
-    raw["symbol"] = raw["symbol"].astype(str).str.zfill(6)
-    raw["trade_date"] = pd.to_datetime(raw["trade_date"], errors="coerce").dt.normalize()
-    for col in ("main_net_inflow_pct", "super_large_net_inflow_pct", "small_net_inflow_pct"):
-        raw[col] = pd.to_numeric(raw[col], errors="coerce")
-
-    dup = int(len(raw) - len(raw.drop_duplicates(["symbol", "trade_date"])))
-    dedup = raw.drop_duplicates(["symbol", "trade_date"], keep="last").copy()
-    per_day = dedup.groupby("trade_date", dropna=True)["symbol"].nunique()
-    null_ratio_by_col = {
-        col: float(dedup[col].isna().mean())
-        for col in ("main_net_inflow_pct", "super_large_net_inflow_pct", "small_net_inflow_pct")
-    }
-    all_zero_rows = int(
-        (
-            dedup[["main_net_inflow_pct", "super_large_net_inflow_pct", "small_net_inflow_pct"]]
-            .fillna(np.nan)
-            .eq(0.0)
-            .all(axis=1)
-        ).sum()
-    )
-
-    rows_without_daily_match = 0
-    rows_after_daily_max_date = 0
-    rows_without_daily_match_within_daily_span = 0
-    rows_without_daily_match_absent_symbols = 0
-    rows_without_daily_match_known_symbols = 0
-    absent_symbol_count = 0
-    daily_max_trade_date: Optional[str] = None
-    coverage_ratio_vs_daily: Optional[float] = None
-    if _table_exists(conn, daily_table):
-        daily_pairs = conn.execute(
-            f"""
-            SELECT DISTINCT
-                CAST(symbol AS VARCHAR) AS symbol,
-                CAST(trade_date AS DATE) AS trade_date
-            FROM {daily_table}
-            """
-        ).df()
-        if not daily_pairs.empty:
-            daily_pairs["symbol"] = daily_pairs["symbol"].astype(str).str.zfill(6)
-            daily_pairs["trade_date"] = pd.to_datetime(daily_pairs["trade_date"], errors="coerce").dt.normalize()
-            max_daily_ts = daily_pairs["trade_date"].max()
-            daily_max_trade_date = str(max_daily_ts.date()) if pd.notna(max_daily_ts) else None
-            merged = dedup.merge(daily_pairs, on=["symbol", "trade_date"], how="left", indicator=True)
-            rows_without_daily_match = int((merged["_merge"] == "left_only").sum())
-            if pd.notna(max_daily_ts):
-                missing = merged[merged["_merge"] == "left_only"].copy()
-                rows_after_daily_max_date = int((missing["trade_date"] > max_daily_ts).sum())
-                in_span_missing = missing[missing["trade_date"] <= max_daily_ts].copy()
-                rows_without_daily_match_within_daily_span = int(len(in_span_missing))
-                daily_symbols = set(daily_pairs["symbol"].dropna().astype(str))
-                absent_symbol_mask = ~in_span_missing["symbol"].astype(str).isin(daily_symbols)
-                rows_without_daily_match_absent_symbols = int(absent_symbol_mask.sum())
-                rows_without_daily_match_known_symbols = int((~absent_symbol_mask).sum())
-                absent_symbol_count = int(in_span_missing.loc[absent_symbol_mask, "symbol"].nunique())
-            overlap_days = daily_pairs["trade_date"].isin(dedup["trade_date"].dropna().unique())
-            daily_overlap = daily_pairs.loc[overlap_days]
-            if not daily_overlap.empty:
-                coverage_ratio_vs_daily = float(len(merged) - rows_without_daily_match) / float(len(daily_overlap))
-
-    notes: List[str] = []
-    ok = True
-    if dup > 0:
-        ok = False
-        notes.append("存在重复 (symbol, trade_date) 主键。")
-    if rows_without_daily_match_known_symbols > 0:
-        ok = False
-        notes.append("存在日线已覆盖标的的资金流 trade_date 找不到对应日线行，可能有日期错位。")
-    if rows_without_daily_match_absent_symbols > 0:
-        notes.append("部分资金流标的完全不在日线表中，通常是数据源市场范围宽于当前日线 universe。")
-    elif rows_after_daily_max_date > 0:
-        ok = False
-        notes.append("资金流日期晚于日线表最新日期；请先补齐日线表再判断资金流对齐质量。")
-    if rows_without_daily_match_absent_symbols > 0 and rows_after_daily_max_date > 0:
-        ok = False
-        notes.append("资金流日期晚于日线表最新日期；请先补齐日线表再判断剩余对齐质量。")
-    if all_zero_rows > 0 and all_zero_rows / max(len(dedup), 1) > 0.2:
-        ok = False
-        notes.append("全零资金流行占比偏高，需排查是否有静默失败或异常回填。")
-    high_null_cols = [c for c, ratio in null_ratio_by_col.items() if ratio > 0.3]
-    if high_null_cols:
-        ok = False
-        notes.append("关键资金流列空值率偏高：" + ", ".join(sorted(high_null_cols)))
-
-    return FundFlowQualityReport(
-        ok=ok,
-        table_exists=True,
-        total_rows=int(len(dedup)),
-        distinct_symbols=int(dedup["symbol"].nunique()),
-        min_trade_date=str(dedup["trade_date"].min().date()) if dedup["trade_date"].notna().any() else None,
-        max_trade_date=str(dedup["trade_date"].max().date()) if dedup["trade_date"].notna().any() else None,
-        duplicate_pk_rows=dup,
-        rows_without_daily_match=rows_without_daily_match,
-        rows_after_daily_max_date=rows_after_daily_max_date,
-        rows_without_daily_match_within_daily_span=rows_without_daily_match_within_daily_span,
-        rows_without_daily_match_absent_symbols=rows_without_daily_match_absent_symbols,
-        rows_without_daily_match_known_symbols=rows_without_daily_match_known_symbols,
-        absent_symbol_count=absent_symbol_count,
-        daily_max_trade_date=daily_max_trade_date,
-        all_zero_flow_rows=all_zero_rows,
-        null_ratio_by_col=null_ratio_by_col,
-        coverage_ratio_vs_daily=coverage_ratio_vs_daily,
-        median_symbols_per_day=float(per_day.median()) if not per_day.empty else 0.0,
-        p10_symbols_per_day=float(per_day.quantile(0.1)) if not per_day.empty else 0.0,
-        notes=notes,
-    )
-
-
-def run_shareholder_quality_checks(
-    conn: duckdb.DuckDBPyConnection,
-    *,
-    table: str = "a_share_shareholder",
-    fallback_lag_days: int = 30,
-    min_effective_width: int = 100,
-) -> ShareholderQualityReport:
-    """
-    股东人数数据质量检查。
-
-    关注项：
-    - notice_date 覆盖率
-    - fallback lag 使用比例
-    - 公告滞后是否异常
-    - 截面覆盖宽度与可用日期数
-    """
-    if not _table_exists(conn, table):
-        return ShareholderQualityReport(ok=False, table_exists=False, notes=[f"表不存在: {table}"])
-
-    raw = conn.execute(
-        f"""
-        SELECT symbol, end_date, notice_date, holder_count, holder_change
-        FROM {table}
-        """
-    ).df()
-    if raw.empty:
-        return ShareholderQualityReport(ok=False, table_exists=True, notes=[f"表为空: {table}"])
-
-    raw["symbol"] = raw["symbol"].astype(str).str.zfill(6)
-    raw["end_date"] = pd.to_datetime(raw["end_date"], errors="coerce").dt.normalize()
-    raw["notice_date"] = pd.to_datetime(raw["notice_date"], errors="coerce").dt.normalize()
-    raw["holder_count"] = pd.to_numeric(raw["holder_count"], errors="coerce")
-    raw["holder_change"] = pd.to_numeric(raw["holder_change"], errors="coerce")
-
-    dup = int(len(raw) - len(raw.drop_duplicates(["symbol", "end_date"])))
-    dedup = raw.drop_duplicates(["symbol", "end_date"], keep="last").copy()
-    notice_present = raw["notice_date"].notna()
-    notice_coverage = float(notice_present.mean()) if len(raw) else 0.0
-    fallback_usage = float((~notice_present).mean()) if len(raw) else 0.0
-    lag_days = (raw["notice_date"] - raw["end_date"]).dt.days
-    negative_notice_lag_rows = int((lag_days < 0).fillna(False).sum())
-    per_end_date = dedup.groupby("end_date", dropna=True)["symbol"].nunique()
-
-    availability_date = raw["notice_date"].copy()
-    invalid_notice_mask = availability_date.notna() & (availability_date < raw["end_date"])
-    fallback_mask = availability_date.isna() | invalid_notice_mask
-    availability_date = availability_date.where(
-        ~fallback_mask,
-        raw["end_date"] + pd.to_timedelta(int(fallback_lag_days), unit="D"),
-    )
-    effective_dates = availability_date.value_counts(dropna=True)
-    effective_factor_dates_ge_min_width = int((effective_dates >= int(min_effective_width)).sum())
-
-    notes: List[str] = []
-    ok = True
-    if dup > 0:
-        ok = False
-        notes.append("存在重复 (symbol, end_date) 主键。")
-    if notice_coverage < 0.5:
-        ok = False
-        notes.append("notice_date 覆盖率过低，PIT 可解释性不足。")
-    if negative_notice_lag_rows > 0:
-        notes.append("存在 notice_date 早于 end_date 的记录，PIT 可用日已按 end_date + fallback lag 保守处理。")
-    if float(per_end_date.median()) < float(min_effective_width) if not per_end_date.empty else True:
-        ok = False
-        notes.append("股东人数截面覆盖宽度不足。")
-    if effective_factor_dates_ge_min_width == 0:
-        ok = False
-        notes.append("没有足够宽度的有效可用日期，单因子研究样本偏弱。")
-
-    return ShareholderQualityReport(
-        ok=ok,
-        table_exists=True,
-        total_rows=int(len(dedup)),
-        distinct_symbols=int(dedup["symbol"].nunique()),
-        distinct_end_dates=int(dedup["end_date"].nunique()),
-        min_end_date=str(dedup["end_date"].min().date()) if dedup["end_date"].notna().any() else None,
-        max_end_date=str(dedup["end_date"].max().date()) if dedup["end_date"].notna().any() else None,
-        duplicate_pk_rows=dup,
-        notice_date_coverage_ratio=notice_coverage,
-        fallback_lag_usage_ratio=fallback_usage,
-        negative_notice_lag_rows=negative_notice_lag_rows,
-        median_notice_lag_days=float(lag_days[lag_days.notna()].median()) if lag_days.notna().any() else None,
-        p90_notice_lag_days=float(lag_days[lag_days.notna()].quantile(0.9)) if lag_days.notna().any() else None,
-        median_symbols_per_end_date=float(per_end_date.median()) if not per_end_date.empty else 0.0,
-        p10_symbols_per_end_date=float(per_end_date.quantile(0.1)) if not per_end_date.empty else 0.0,
-        effective_factor_dates_ge_min_width=effective_factor_dates_ge_min_width,
         notes=notes,
     )
 

@@ -1,11 +1,7 @@
-"""指数基准数据规格与标准化（从 fetch_index_benchmarks 脚本迁入 src/）。
+"""Index benchmark fetch specs and daily-bar standardization.
 
-本模块供：
-- scripts/fetch_index_benchmarks.py（薄层 CLI）
-- tests/test_fetch_newdata_cli.py（测试）
-- src/pipeline/monthly_baselines.py（基准计算）
-
-一起使用，避免测试直接导入 scripts.*。
+The single-stock trend system keeps this small helper so backtests can compare
+strategy performance against broad-market indexes when needed.
 """
 
 from __future__ import annotations

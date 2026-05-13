@@ -1,48 +1,36 @@
-from .akshare_client import fetch_a_share_daily, list_default_universe_symbols
+from .akshare_client import fetch_a_share_daily, fill_derived_daily_fields, list_default_universe_symbols
 
 __all__ = [
     "fetch_a_share_daily",
+    "fill_derived_daily_fields",
     "list_default_universe_symbols",
     "DuckDBManager",
     "SymbolUpdateResult",
     "QualityConfig",
     "QualityReport",
+    "check_split_jump",
     "run_quality_checks",
     "validate_daily_frame",
-    "FundamentalClient",
-    "FundFlowClient",
-    "ShareholderClient",
-    "DailyDataSource",
-    "FundamentalDataSource",
-    "FundFlowDataSource",
-    "AkShareDailyDataSource",
-    "AkShareFundamentalDataSource",
-    "AkShareFundFlowDataSource",
-    "DataSourceSet",
-    "FetchResult",
-    "resolve_sources",
-    "register_daily_source",
-    "register_fundamental_source",
-    "register_fund_flow_source",
-    "IndustryMapQuality",
-    "FALLBACK_SOURCE",
-    "align_to_universe",
-    "deduplicate_mapping",
-    "fetch_industry_mapping",
-    "fetch_mapping_by_source",
-    "load_current_universe",
-    "normalize_symbol",
-    "quality_summary",
+    "IndexFetchSpec",
+    "DEFAULT_INDEX_SPECS",
+    "parse_index_specs",
+    "standardize_index_daily",
+    "load_stock_name_cache",
+    "load_stock_name_map",
+    "resolve_stock_name_cache_path",
+    "resolve_stock_names",
+    "attach_stock_names",
 ]
 
 
 def __getattr__(name: str):
-    if name in {"QualityConfig", "QualityReport", "run_quality_checks", "validate_daily_frame"}:
-        from .data_quality import QualityConfig, QualityReport, run_quality_checks, validate_daily_frame
+    if name in {"QualityConfig", "QualityReport", "check_split_jump", "run_quality_checks", "validate_daily_frame"}:
+        from .data_quality import QualityConfig, QualityReport, check_split_jump, run_quality_checks, validate_daily_frame
 
         return {
             "QualityConfig": QualityConfig,
             "QualityReport": QualityReport,
+            "check_split_jump": check_split_jump,
             "run_quality_checks": run_quality_checks,
             "validate_daily_frame": validate_daily_frame,
         }[name]
@@ -50,47 +38,23 @@ def __getattr__(name: str):
         from .db_manager import DuckDBManager, SymbolUpdateResult
 
         return {"DuckDBManager": DuckDBManager, "SymbolUpdateResult": SymbolUpdateResult}[name]
-    if name == "FundamentalClient":
-        from .fundamental_client import FundamentalClient
-
-        return FundamentalClient
-    if name == "FundFlowClient":
-        from .fund_flow_client import FundFlowClient
-
-        return FundFlowClient
-    if name == "ShareholderClient":
-        from .shareholder_client import ShareholderClient
-
-        return ShareholderClient
     if name in {
-        "DailyDataSource",
-        "FundamentalDataSource",
-        "FundFlowDataSource",
-        "AkShareDailyDataSource",
-        "AkShareFundamentalDataSource",
-        "AkShareFundFlowDataSource",
-        "DataSourceSet",
-        "FetchResult",
-        "resolve_sources",
-        "register_daily_source",
-        "register_fundamental_source",
-        "register_fund_flow_source",
+        "IndexFetchSpec",
+        "DEFAULT_INDEX_SPECS",
+        "parse_index_specs",
+        "standardize_index_daily",
     }:
-        from . import adapter
+        from . import index_benchmarks
 
-        return getattr(adapter, name)
+        return getattr(index_benchmarks, name)
     if name in {
-        "IndustryMapQuality",
-        "FALLBACK_SOURCE",
-        "align_to_universe",
-        "deduplicate_mapping",
-        "fetch_industry_mapping",
-        "fetch_mapping_by_source",
-        "load_current_universe",
-        "normalize_symbol",
-        "quality_summary",
+        "load_stock_name_cache",
+        "load_stock_name_map",
+        "resolve_stock_name_cache_path",
+        "resolve_stock_names",
+        "attach_stock_names",
     }:
-        from . import industry_map
+        from . import stock_name_cache
 
-        return getattr(industry_map, name)
+        return getattr(stock_name_cache, name)
     raise AttributeError(name)

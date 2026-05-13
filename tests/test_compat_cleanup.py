@@ -4,6 +4,7 @@ import pandas as pd
 
 from src.backtest.engine import BacktestConfig, run_backtest
 from src.backtest.transaction_costs import TransactionCostParams, cost_params_dict_for_logging
+import src.data_fetcher as data_fetcher
 from src.data_fetcher.migrations import apply_migrations
 
 
@@ -45,3 +46,18 @@ def test_compat_engine_runs_simple_daily_weight_backtest():
 
     np.testing.assert_allclose(res.daily_returns.to_numpy(), [0.0, 0.02, -0.01])
     assert res.meta["compatibility_engine"] is True
+
+
+def test_data_fetcher_public_api_excludes_old_research_clients():
+    old_names = {
+        "FundamentalClient",
+        "FundFlowClient",
+        "ShareholderClient",
+        "register_fundamental_source",
+        "register_fund_flow_source",
+        "fetch_industry_mapping",
+    }
+
+    assert old_names.isdisjoint(set(data_fetcher.__all__))
+    for name in old_names:
+        assert not hasattr(data_fetcher, name)

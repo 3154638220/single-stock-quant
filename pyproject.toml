@@ -29,7 +29,7 @@ source = ["src"]
 omit = ["*/tests/*", "*/__pycache__/*"]
 
 [tool.coverage.report]
-# 核心 pipeline 模块期望 ≥ 80%
+# 核心趋势链路模块期望 ≥ 80%
 exclude_lines = [
     "pragma: no cover",
     "def __repr__",

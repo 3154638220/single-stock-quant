@@ -918,3 +918,25 @@ pytest tests/test_compat_cleanup.py tests/test_db_manager_schema.py tests/test_e
 pytest
 # 22 passed, 1 warning
 ```
+
+2026-05-13 本轮继续推进（数据拉取模块瘦身）：
+
+1. `src/data_fetcher/`：删除旧研究数据客户端 `adapter.py`、`fundamental_client.py`、`fund_flow_client.py`、`shareholder_client.py`、`northbound_client.py`、`margin_trading_client.py`、`concept_client.py`、`industry_map.py`、`disclosure_calendar.py`。
+2. `src/data_fetcher/__init__.py`：公开 API 收敛到日线拉取、DuckDB 管理、质量检查、指数基准标准化和本地股票名称缓存；不再暴露基本面/资金流/股东/行业相关入口。
+3. `src/data_fetcher/data_quality.py`：移除资金流与股东人数质量检查，只保留日线质量检查和复权跳变检测。
+4. `src/data_fetcher/index_benchmarks.py`：清理旧 pipeline/月度基准说明，改为单股趋势回测的指数基准辅助模块。
+5. `tests/test_compat_cleanup.py`：新增公开 API 防回归测试，确保旧研究客户端不会重新出现在 `src.data_fetcher` 导出面。
+6. `pyproject.toml`：覆盖率说明从旧 pipeline 语境改为核心趋势链路语境。
+
+本轮验收：
+
+```bash
+python -m py_compile src/data_fetcher/__init__.py src/data_fetcher/data_quality.py src/data_fetcher/db_manager.py scripts/fetch_stock.py scripts/run_signal.py scripts/run_backtest_single.py
+# passed
+
+pytest tests/test_compat_cleanup.py tests/test_db_manager_schema.py tests/test_stock_name_cache.py
+# 8 passed, 1 warning
+
+pytest
+# 23 passed, 1 warning
+```
