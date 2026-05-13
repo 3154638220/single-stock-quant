@@ -75,6 +75,7 @@ Run a backtest:
 ```bash
 python scripts/run_backtest_single.py --symbol 600930 --start 2020-01-01 --end 2025-12-31
 python scripts/run_backtest_single.py --symbol 600930 --export-trades
+python scripts/run_backtest_single.py --symbol 600930 --duckdb-path /path/to/market.duckdb --stock-name-cache /path/to/stock_names.csv
 ```
 
 ## Structure

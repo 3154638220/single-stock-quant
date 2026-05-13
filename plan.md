@@ -871,3 +871,29 @@ python scripts/fetch_stock.py --help
 python scripts/run_signal.py --help
 # passed
 ```
+
+2026-05-13 本轮继续推进（回测入口体验打磨）：
+
+1. `scripts/run_backtest_single.py`：新增 `--duckdb-path` 与 `--stock-name-cache` 覆盖参数，与 `run_signal.py` 的本地数据/名称缓存覆盖能力保持一致。
+2. `scripts/run_backtest_single.py`：单模式回测输出改为中文报告，包含总收益、买入持有、超额、年化收益、夏普、最大回撤、Calmar、交易统计和最近 5 笔交易。
+3. `scripts/run_backtest_single.py`：`--compare-modes` 输出改为中文三模式对比表，并补充超额收益列。
+4. `README.md`、`docs/backtest_guide.md`：补充回测入口的 DuckDB 与名称缓存路径覆盖示例。
+
+本轮验收：
+
+```bash
+python -m py_compile scripts/run_backtest_single.py
+# passed
+
+python scripts/run_backtest_single.py --help
+# passed
+
+pytest
+# 19 passed, 1 warning
+
+python scripts/run_backtest_single.py --symbol 600930 --compare-modes
+# 华电新能 (600930) 三模式回测对比
+# macd_cross total=-1.85%, buy_hold=-11.48%, excess=+9.63%, sharpe=-0.02, max_dd=18.00%, trades=4, win_rate=25.00%
+# ma_cross   total=-9.50%, buy_hold=-11.48%, excess=+1.99%, sharpe=-0.54, max_dd=19.46%, trades=7, win_rate=28.57%
+# boll_trend total=-9.79%, buy_hold=-11.48%, excess=+1.69%, sharpe=-0.53, max_dd=18.00%, trades=10, win_rate=10.00%
+```

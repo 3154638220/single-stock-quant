@@ -18,4 +18,8 @@ Example:
 ```bash
 python scripts/run_backtest_single.py --symbol 600930 --compare-modes
 python scripts/run_backtest_single.py --symbol 600930 --mode macd_cross --export-trades
+python scripts/run_backtest_single.py --symbol 600930 --duckdb-path /path/to/market.duckdb
 ```
+
+Use `--stock-name-cache /path/to/stock_names.csv` when the display-name CSV is
+outside the configured project data directory.
