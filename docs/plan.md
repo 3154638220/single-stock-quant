@@ -18,7 +18,12 @@
 | 阶段 12：WFO 稳定性架构升级 | 已完成（首版） | 新增 `_select_stable_params()`，按跨 fold `mean/(std+0.1)` 选择稳定参数区域；nested WFO 内层参数选择优先使用稳定区域，fold 不足 5 个时自动回退；`run_wfo.py --stability-weighting` 已接线 | `pytest -q` 通过，当前 161 个测试 |
 | 阶段 13：多周期信号确认 | 已完成（首版） | 新增 `src/features/weekly_trend.py`，日线聚合周线并输出 bullish/bearish/neutral；`single_stock.py` 支持 `require_weekly_bullish`、`weekly_ma_fast`、`weekly_ma_slow`；config/CLI/WFO 已接线 | `pytest -q` 通过，当前 168 个测试 |
 | 阶段 14：动态仓位精细化 | 已完成（首版） | 新增 EWMA 年化波动率估计；波动率目标仓位改用 EWMA 并支持高波动折扣；`position_size_cap` 在无止损风险 sizing 时也生效；ATR 止损距离继续约束风险仓位 | `pytest -q` 通过，当前 168 个测试 |
-| 阶段 15：实验闭环与报告完善 | 已完成（首版） | `create_experiment_dir()` 生成阶段 15 产物清单和 `DELTA.md` 占位；新增 `load_experiment_metrics()`、`compare_metric_summaries()`、HTML/Markdown 对比报告渲染；新增 `scripts/compare_experiments.py` 支持实验目录对比、CSV 导出和写回 `DELTA.md` | `pytest tests/test_experiment.py -q` 通过，当前该文件 14 个测试 |
+| 阶段 15：实验闭环与报告完善 | 已完成（首版） | `create_experiment_dir()` 生成阶段 15 产物清单和 `DELTA.md` 占位；新增 `load_experiment_metrics()`、`compare_metric_summaries()`、HTML/Markdown 对比报告渲染；新增 `scripts/compare_experiments.py` 支持实验目录对比、CSV 导出和写回 `DELTA.md`；新增组合 ranking 归因产物 | `pytest -q` 通过，当前 174 个测试 |
+| 阶段 16：组合 ranking 重构实验 | 已完成（首版 + E16a/E16b 实跑） | `rank_signals()` 新增 `ranking_profile=balanced/meta_priority/dk_meta`；`meta_priority` 提高 p_win 权重并降低 MA/RS/流动性线性叠加；`dk_meta` 增加 DK 红色趋势候选池约束；组合回测 CLI/config 已接线 | `pytest -q` 通过；E16a/E16b 已输出组合与 ranking 归因 |
+| 阶段 17：新近 DK 候选池实验 | 已完成（首版 + E17 实跑） | `ranking_profile=dk_fresh_meta` 仅保留 DK 红色且 `dk_run_len<=20` 的候选，验证“新近 BUY + 趋势未老化”假设；CLI/config 已接线 | `pytest tests/test_portfolio.py -q` 通过；E17 已输出组合与 ranking 归因 |
+| 阶段 18：滚动 forward-return 校准 | 已完成（首版 + E18 实跑） | `ranking_profile=dk_calibrated_meta` 在 DK 红色候选池上叠加滚动 score bucket forward-return 校准；校准只使用当日以前已完整可观测的历史 forward return；CLI/config 已接线 | `pytest tests/test_portfolio.py -q` 与 ruff 通过；E18 已输出组合与 ranking 归因 |
+| 阶段 19：候选池根因归因 | 已完成（首版 + E19 首跑） | 新增 `compute_candidate_forward_return_breakdown()` 与 `scripts/analyze_candidate_breakdown.py`，按 symbol / market regime / industry 拆解候选池 forward return；benchmark 缺失时用 watchlist 等权收盘代理 regime | `pytest tests/test_portfolio.py tests/test_experiment.py -q` 与 ruff 通过；E16 `candidate_breakdown.csv` 已输出 |
+| 阶段 20：结构性 symbol/行业护栏 | 已完成（首版 + E20 首跑） | `rank_signals()` 支持 `exclude_symbols` 与 `greylist_symbols`；组合回测和 CLI 支持 blacklist/greylist、行业映射 CSV 与 `max_per_industry`；config 示例已接线 | `pytest tests/test_portfolio.py tests/test_experiment.py -q` 与 ruff 通过；E20 已输出组合与归因 |
 
 阶段 10 首次真实数据实验已完成：`python scripts/run_portfolio_backtest.py --watchlist configs/watchlist_25.txt --start 2020-01-01 --end 2026-05-08 --n-top 5 --enable-meta-label --require-above-ma120 --export-summary data/output/portfolio_final.csv --export-weights data/output/portfolio_final_weights.csv --export-scores data/output/portfolio_final_scores.csv --export-html`。
 
@@ -29,6 +34,191 @@
 - `data/output/portfolio_backtest_20260514.html`
 
 E10 首跑结果：年化收益 -1.79%，Sharpe 0.06，Calmar -0.03，最大回撤 64.34%，平均持仓 4.4。结果未达到组合 Sharpe ≥ 0.75、最大回撤 ≤ 28% 的验收目标；阶段 11/12/13/14/15 的代码层首版已完成，下一步应重跑 E11/E12/E13/E14/E_FINAL 实验，并用 `scripts/compare_experiments.py` 生成 DELTA 对比报告，验证新特征、稳定选参、周线过滤和 EWMA 仓位约束是否改善 WFO OOS 指标，同时复盘组合 ranking 是否过度持有弱势标的。
+
+### 0.1 实验推进更新（2026-05-14）
+
+已将 E10 首跑归档为标准实验目录 `data/output/experiments/E10_portfolio_oos/`，并补跑 4 个组合过滤变体；所有变体都已生成 `portfolio_summary.csv`、`portfolio_weights.csv`、`portfolio_scores.csv`，并通过 `scripts/compare_experiments.py` 生成 `comparison.html` / `comparison.csv` / `DELTA.md`。
+
+| 实验目录 | 配置摘要 | 年化收益 | Sharpe | Calmar | 最大回撤 | 平均持仓 | 相对 E10 结论 |
+|---|---|---:|---:|---:|---:|---:|---|
+| `E10_portfolio_oos` | meta-label + MA120，n_top=5 | -1.79% | 0.06 | -0.03 | 64.34% | 4.4 | 基准 |
+| `E_FINAL_portfolio_strict` | meta-label + p_win>=0.52 + MA120 + RS60，n_top=3 | -7.06% | -0.41 | -0.17 | 40.68% | 1.6 | 回撤改善，但收益/Sharpe 显著恶化 |
+| `E_FINAL_portfolio_ma_rs_n3` | MA120 + RS60，n_top=3 | -8.46% | -0.27 | -0.13 | 66.51% | 2.7 | 全面劣于 E10 |
+| `E_FINAL_portfolio_ma_rs_n5` | MA120 + RS60，n_top=5 | -6.37% | -0.12 | -0.09 | 70.34% | 4.2 | 全面劣于 E10 |
+| `E_FINAL_portfolio_ma_n5` | MA120，n_top=5 | -3.45% | -0.00 | -0.05 | 65.51% | 4.4 | 收益损伤较小，但回撤未改善 |
+
+阶段性判断：当前问题不再是“过滤开关不够多”，而是 portfolio cross-sectional ranking 的收益排序能力不足。更严格的 meta/MA/RS 过滤可以减少持仓并在 strict 版本中降低最大回撤，但没有把资金稳定分配到正期望标的，导致收益端恶化。下一步优先级应转向组合层信号归因：按每日 rank 分位统计未来 1/5/20 日收益、命中率和回撤贡献，验证 `rank_signals()` 的分数是否与未来收益单调；若不单调，应先重构 ranking 权重或改成“趋势信号候选池 + meta p_win 排序”，而不是继续叠加硬过滤。
+
+已新增 `scripts/analyze_portfolio_ranking.py` 和 `src/portfolio/attribution.py`，按 T+1 open 执行口径统计 score bucket 的未来 open-to-open 收益。对 E10 分数的归因结果已写入 `data/output/experiments/E10_portfolio_oos/ranking_attribution.csv` 和 `ranking_attribution_summary.csv`：
+
+| Horizon | Top - Bottom | Bucket Return Corr | 单调性 |
+|---:|---:|---:|---|
+| 1 | -0.03pct | -0.122 | 否 |
+| 5 | -0.06pct | 0.040 | 否 |
+| 20 | -0.82pct | -0.385 | 否 |
+
+结论：E10 的 rank score 暂时不能作为正向排序信号，尤其 20 日维度出现明显反向。下一步应新增 E16：组合 ranking 重构实验，候选方案包括降低 MA/RS/流动性分的线性叠加权重、将 DK buy 信号作为候选池约束、用 `p_win` 或近期真实 forward-return bucket 做二次排序，并对每版 ranking 强制输出 `ranking_attribution_summary.csv` 作为上线前验收。
+
+### 0.2 阶段 16 推进更新（2026-05-14）
+
+已完成 E16 首版代码入口。组合 ranking 现在支持三种画像：
+
+| ranking_profile | 目的 | 评分结构 |
+|---|---|---|
+| `balanced` | 保持 E10/stage-10 基准行为 | p_win 25%，RS/趋势/MA/动量/突破/流动性继续线性叠加 |
+| `meta_priority` | 验证 p_win 是否比传统线性技术分更适合作横截面排序主因子 | p_win 55%，显著降低 MA/RS/流动性/市场状态权重 |
+| `dk_meta` | 验证“趋势候选池 + p_win 排序”是否修复随机排序问题 | 仅保留 DK 红色趋势状态候选，p_win 65% 主排序 |
+
+CLI 已接线：
+
+```bash
+python scripts/run_portfolio_backtest.py \
+  --watchlist configs/watchlist_25.txt \
+  --start 2020-01-01 --end 2026-05-08 \
+  --n-top 3 \
+  --enable-meta-label \
+  --ranking-profile dk_meta \
+  --export-summary data/output/experiments/E16_dk_meta/portfolio_summary.csv \
+  --export-weights data/output/experiments/E16_dk_meta/portfolio_weights.csv \
+  --export-scores data/output/experiments/E16_dk_meta/portfolio_scores.csv
+```
+
+E16 的上线前验收不只看组合 Sharpe/MDD，还必须重新运行 `scripts/analyze_portfolio_ranking.py` 输出 `ranking_attribution_summary.csv`。若 top-bottom 在 5/20 日维度仍为负或 bucket return corr 不转正，应继续迭代 ranking，而不是把该画像并入最终配置。
+
+已完成两版真实数据实跑，并生成 `comparison.html` / `comparison.csv` / `DELTA.md`：
+
+| 实验目录 | ranking_profile | 年化收益 | Sharpe | Calmar | 最大回撤 | 平均持仓 | 归因结论 |
+|---|---|---:|---:|---:|---:|---:|---|
+| `E16_meta_priority` | `meta_priority` | -4.74% | -0.11 | -0.07 | 65.20% | 2.9 | 1/5/20 日 top-bottom 全为负，失败 |
+| `E16_dk_meta` | `dk_meta` | 0.22% | 0.11 | 0.00 | 51.45% | 2.9 | 5/20 日 top-bottom 转正，但 bucket 仍不单调 |
+
+阶段性判断：单纯提高 p_win 权重会恶化组合结果，说明当前 meta-label 分数本身仍不足以作为主排序因子；`dk_meta` 证明“先限定趋势候选池”方向更可靠，最大回撤相对 E10 下降约 12.9pct，且 5/20 日归因转正，但 Sharpe 和 Calmar 仍远低于目标。下一步应沿 `dk_meta` 继续迭代：减少持仓期内弱趋势漂移、加入真实 forward-return bucket 的滚动校准，或把候选池从 DK 红色状态进一步收窄为“新近 BUY + 趋势未老化”。
+
+### 0.3 阶段 17 推进更新（2026-05-14）
+
+已完成 E17 首版代码入口。组合 ranking 新增 `dk_fresh_meta` 画像：在 `dk_meta` 的 DK 红色候选池基础上，进一步要求 `dk_run_len <= 20`，只保留最近转红或趋势尚未老化的候选。该实验用于验证 E16 后的假设：“收益弱化可能来自持有已走老的红色趋势”。
+
+CLI 示例：
+
+```bash
+python scripts/run_portfolio_backtest.py \
+  --watchlist configs/watchlist_25.txt \
+  --start 2020-01-01 --end 2026-05-08 \
+  --n-top 3 \
+  --enable-meta-label \
+  --ranking-profile dk_fresh_meta \
+  --export-summary data/output/experiments/E17_dk_fresh_meta/portfolio_summary.csv \
+  --export-weights data/output/experiments/E17_dk_fresh_meta/portfolio_weights.csv \
+  --export-scores data/output/experiments/E17_dk_fresh_meta/portfolio_scores.csv
+```
+
+E17 真实数据结果已生成 `portfolio_summary.csv`、`portfolio_weights.csv`、`portfolio_scores.csv`、`ranking_attribution.csv`、`ranking_attribution_summary.csv`、`comparison.html`、`comparison.csv`、`DELTA.md`。
+
+| 实验目录 | ranking_profile | 年化收益 | Sharpe | Calmar | 最大回撤 | 平均持仓 | 归因结论 |
+|---|---|---:|---:|---:|---:|---:|---|
+| `E16_dk_meta` | `dk_meta` | 0.22% | 0.11 | 0.00 | 51.45% | 2.9 | 5/20 日 top-bottom 转正，但 bucket 仍不单调 |
+| `E17_dk_fresh_meta` | `dk_fresh_meta` | -1.09% | 0.05 | -0.02 | 49.20% | 2.8 | 1/5 日 top-bottom 微正，20 日转负；bucket 仍不单调 |
+
+相对 E16，E17 最大回撤下降约 2.25pct，但年化收益、Sharpe、Calmar、total return 和 ranking top-bottom spread 都恶化；`DELTA.md` 显示 12 个可比指标中 1 个改善、7 个恶化、4 个持平。结论：单纯收窄到“新近 DK 红色趋势”只能轻微控回撤，无法提升排序质量，暂不应作为默认配置。下一步优先做 rolling forward-return calibration：用历史 score bucket 的真实 OOS forward return 对候选分数做滚动校准，避免继续只靠静态技术权重和 p_win 线性叠加。
+
+### 0.4 阶段 18 推进更新（2026-05-14）
+
+已完成 E18 首版代码入口。组合 ranking 新增 `dk_calibrated_meta` 画像：先沿用 `dk_meta` 的 DK 红色趋势候选池，再对原始分数按滚动历史 score bucket 的真实 forward return 做校准。校准函数 `calibrate_scores_by_forward_returns()` 使用 T+1 open 执行口径：若预测日为 `t`、校准 horizon 为 5，则最新训练样本只允许使用 `t-6` 及以前的 score，因为这些样本的 `open[t+1]` 到 `open[t+6]` forward return 才已完整可观测。
+
+CLI 示例：
+
+```bash
+python scripts/run_portfolio_backtest.py \
+  --watchlist configs/watchlist_25.txt \
+  --start 2020-01-01 --end 2026-05-08 \
+  --n-top 3 \
+  --enable-meta-label \
+  --ranking-profile dk_calibrated_meta \
+  --export-summary data/output/experiments/E18_dk_calibrated_meta/portfolio_summary.csv \
+  --export-weights data/output/experiments/E18_dk_calibrated_meta/portfolio_weights.csv \
+  --export-scores data/output/experiments/E18_dk_calibrated_meta/portfolio_scores.csv
+```
+
+E18 真实数据结果已生成 `portfolio_summary.csv`、`portfolio_weights.csv`、`portfolio_scores.csv`、`ranking_attribution.csv`、`ranking_attribution_summary.csv`、`comparison.html`、`comparison.csv`、`DELTA.md`、`ARTIFACTS.md`。
+
+| 实验目录 | ranking_profile | 年化收益 | Sharpe | Calmar | 最大回撤 | 平均持仓 | 归因结论 |
+|---|---|---:|---:|---:|---:|---:|---|
+| `E16_dk_meta` | `dk_meta` | 0.22% | 0.11 | 0.00 | 51.45% | 2.9 | 5/20 日 top-bottom 转正，但 bucket 仍不单调 |
+| `E18_dk_calibrated_meta` | `dk_calibrated_meta` | -5.55% | -0.16 | -0.09 | 59.12% | 3.2 | 5 日 top-bottom 与 corr 转正，但 20 日 top-bottom 转负；bucket 仍不单调 |
+
+相对 E16，E18 只改善平均持仓数，年化收益、Sharpe、Calmar、最大回撤、total return 和 ranking 中位归因指标均恶化；`DELTA.md` 显示 12 个可比指标中 1 个改善、7 个恶化、4 个持平。结论：直接按历史 score bucket forward return 对原始分数做强校准会放大噪声，无法作为默认配置。下一步应停止增加组合层线性/桶级补丁，转向单股层信号质量的根因归因：按 symbol/行业/市场 regime 拆解 DK 红色候选池的 forward return，定位哪些股票或环境贡献了负期望，再决定是做 symbol-level blacklist/whitelist、行业相对强弱，还是改造 meta-label 标签目标。
+
+### 0.5 阶段 19 推进更新（2026-05-14）
+
+已完成 E19 首版代码入口。新增 `src/portfolio/attribution.py::compute_candidate_forward_return_breakdown()`，把候选分数面板中 `score > min_score` 的样本按 T+1 open 执行口径计算未来 1/5/20 日 open-to-open return，并按 `symbol`、`market_regime`、可选 `industry` 聚合。新增 `scripts/analyze_candidate_breakdown.py`，可直接复用 E16/E17/E18 导出的 `portfolio_scores.csv`：
+
+```bash
+python scripts/analyze_candidate_breakdown.py \
+  --scores data/output/experiments/E16_dk_meta/portfolio_scores.csv \
+  --watchlist configs/watchlist_25.txt \
+  --start 2020-01-01 --end 2026-05-08 \
+  --horizons 1,5,20 \
+  --group-by symbol,market_regime \
+  --output data/output/experiments/E16_dk_meta/candidate_breakdown.csv
+```
+
+E19 首跑使用 E16 `dk_meta` 分数，输出 `data/output/experiments/E16_dk_meta/candidate_breakdown.csv`。本地 DuckDB 缺少默认 benchmark `510300`，工具已回退为 watchlist 等权收盘价代理 market regime。
+
+20 日 horizon 的聚合结论：
+
+| 维度 | 负贡献/正贡献 | 结论 |
+|---|---:|---|
+| market regime | mixed 均值 +0.33%，bear +0.87%，bull +1.69% | DK 候选池的负期望不来自简单 bear regime；bull regime 反而更强 |
+| 最弱 symbol | `000002` -2.33%，`600048` -1.31%，`600585` -0.86% | 地产/周期弱股在 DK 红色候选池内仍显著负期望 |
+| 最强 symbol | `300750` +5.99%，`300059` +5.39%，`002594` +3.73%，`002475` +3.40% | 新能源/高 beta 成长股贡献主要正期望 |
+| 最差 symbol-regime 组合 | `000002` mixed -4.34%，`601888` mixed -3.88%，`600048` mixed -3.85%，`000002` bull -3.35% | 问题更偏 symbol/行业结构，而非继续叠加市场过滤 |
+
+阶段性判断：继续做组合层 ranking 的线性权重/桶级校准意义不大。下一阶段优先级应转向“行业/个股结构过滤”：为 watchlist 增加行业映射，做行业相对强弱和 symbol-level OOS 负期望稳定性检验；若 `000002`、`600048`、`600585` 等在多个 horizon 和 regime 下持续为负，可做 E20：行业相对强弱过滤或 symbol-level blacklist/greylist，并要求其不牺牲 `300750`、`300059`、`002594` 这类主要正贡献标的的持仓机会。
+
+### 0.6 阶段 20 推进更新（2026-05-14）
+
+已完成 E20 代码入口和首轮真实数据实验。组合 ranking 增加两个不绑定具体 watchlist 的结构性护栏：
+
+| 参数 | 作用 | 用途 |
+|---|---|---|
+| `exclude_symbols` / `--exclude-symbols` | 将指定 symbol 的最终 rank score 置 0 | 验证 E19 中稳定负期望标的是否拖累组合 |
+| `greylist_symbols` / `--greylist-symbols` + `greylist_score_scale` | 对指定 symbol 的最终 rank score 乘以折扣 | 验证“降权而非完全剔除”是否保留偶发趋势机会 |
+| `industry_map` / `--industry-map` | 读取 `symbol/code, industry/industry_name` CSV | 启用组合层 `max_per_industry` 暴露控制 |
+| `max_per_industry` / `--max-per-industry` | 限制单行业最大组合权重 | 防止 E19 暴露的行业结构风险集中 |
+
+CLI 示例：
+
+```bash
+python scripts/run_portfolio_backtest.py \
+  --watchlist configs/watchlist_25.txt \
+  --start 2020-01-01 --end 2026-05-08 \
+  --n-top 3 \
+  --enable-meta-label \
+  --ranking-profile dk_meta \
+  --exclude-symbols 000002,600048 \
+  --greylist-symbols 600585 \
+  --greylist-score-scale 0.50 \
+  --export-summary data/output/experiments/E20_symbol_guard/portfolio_summary.csv \
+  --export-weights data/output/experiments/E20_symbol_guard/portfolio_weights.csv \
+  --export-scores data/output/experiments/E20_symbol_guard/portfolio_scores.csv
+```
+
+E20 首跑配置：`dk_meta` + `exclude_symbols=000002,600048` + `greylist_symbols=600585` + `greylist_score_scale=0.50`。输出目录为 `data/output/experiments/E20_symbol_guard/`，已生成 `portfolio_summary.csv`、`portfolio_weights.csv`、`portfolio_scores.csv`、`ranking_attribution.csv`、`ranking_attribution_summary.csv`、`candidate_breakdown.csv`、`comparison.html`、`comparison.csv`、`DELTA.md`。
+
+| 实验目录 | 配置摘要 | 年化收益 | Sharpe | Calmar | 最大回撤 | 平均持仓 | 相对 E16 `dk_meta` |
+|---|---|---:|---:|---:|---:|---:|---|
+| `E16_dk_meta` | DK 红色候选池 + p_win 排序 | 0.22% | 0.114 | 0.004 | 51.45% | 2.87 | 基准 |
+| `E20_symbol_guard` | 排除 `000002`、`600048`，`600585` 分数 0.5x | 2.29% | 0.213 | 0.053 | 43.52% | 2.85 | 12 个指标中 7 个改善、1 个恶化 |
+
+Ranking 归因同步改善但仍不单调：
+
+| Horizon | Top - Bottom | Bucket Return Corr | 单调性 |
+|---:|---:|---:|---|
+| 1 | +0.02pct | 0.252 | 否 |
+| 5 | +0.29pct | 0.510 | 否 |
+| 20 | +0.37pct | 0.302 | 否 |
+
+验收检查：`000002` 与 `600048` 最大持仓权重均为 0；`300750`、`300059`、`002594` 最大持仓权重仍为 0.25，正贡献标的未被直接误伤。`candidate_breakdown.csv` 中 20 日 horizon 不再包含被排除的 `000002`、`600048`，但 `600585` 在降权后仍是最弱 symbol（20 日聚合均值约 -0.99%），说明下一轮 E21 应测试 `600585` 全排除、行业相对强弱过滤，或 rolling symbol greylist，而不是直接把静态 blacklist 作为默认策略。
 
 ---
 
@@ -612,6 +802,9 @@ data/output/experiments/{YYYYMMDD}_{exp_id}/
   wfo_summary.csv                # 已有
   trade_attribution.csv          # 已有
   portfolio_summary.csv          # 新增（阶段 10）
+  ranking_attribution.csv        # 新增（组合 ranking 分位归因）
+  ranking_attribution_summary.csv # 新增（组合 ranking 单调性摘要）
+  candidate_breakdown.csv        # 新增（候选池 symbol/regime/industry 根因归因）
   meta_label_calibration.csv     # 新增（阶段 8）
   feature_importance.csv         # 新增（阶段 11）
   regime_breakdown.csv           # 已有
@@ -650,6 +843,12 @@ python scripts/compare_experiments.py \
 | E12 | WFO 稳定性加权选参 | 减少过拟合，IS/OOS 相关转正 | `wfo.py` | IS/OOS 相关 > 0 | — |
 | E13 | 周线趋势过滤 | 周线熊市中日线 BUY 是假信号 | `weekly_trend.py` | 假信号减少，胜率提升 | — |
 | E14 | EWMA 波动率 + 统一仓位决策树 | 高波动期减仓控回撤 | `single_stock.py` | MDD ≤ 38% | — |
+| E16a | Meta-priority 组合 ranking | 旧线性技术分稀释了 p_win 的排序信息 | `signal_ranker.py`, `run_portfolio_backtest.py` | — | `ranking_attribution_summary.csv` 的 5/20 日 top-bottom 转正 |
+| E16b | DK 候选池 + p_win 排序 | 只在 DK 红色趋势候选池内排序可减少弱势股持仓 | `signal_ranker.py`, `run_portfolio_backtest.py` | — | MDD 低于 E10，且 ranking bucket corr 转正 |
+| E17 | 新近 DK 候选池 + p_win 排序 | 趋势老化后的红色状态贡献了弱势持仓 | `signal_ranker.py`, `run_portfolio_backtest.py` | — | MDD 低于 E16 且 20 日 top-bottom 不转负 |
+| E18 | Rolling forward-return calibration | 静态 score 需按历史 OOS forward return 做滚动校准 | `signal_ranker.py`, `attribution.py` | — | 5/20 日 top-bottom 和 bucket corr 同时转正 |
+| E19 | DK 候选池根因归因 | 负期望来自特定 symbol/行业/regime，而不是 ranking 权重本身 | `attribution.py`, `analyze_candidate_breakdown.py` | 找到稳定负贡献 symbol/行业 | 输出 `candidate_breakdown.csv`，形成 E20 过滤假设 |
+| E20 | Symbol/行业结构护栏 | E19 识别的稳定负期望 symbol/行业拖累组合风险收益 | `signal_ranker.py`, `run_portfolio_backtest.py` | — | MDD 不高于 E16，Sharpe/Calmar 不下降，正贡献标的不被误伤 |
 | E_FINAL | 全部开关组合最优配置 | 各改进叠加效果验证 | 所有 | Sharpe ≥ 0.40 | Sharpe ≥ 0.75 |
 
 ---
@@ -788,14 +987,14 @@ python scripts/run_backtest_single.py --symbol 300750 \
 | `src/models/meta_label_gbm.py` | 11 | 新建：GBM 变体（可选） |
 | `src/features/sector_features.py` | 9 | 新建：行业相对强度特征 |
 | `src/features/weekly_trend.py` | 13 | 新建：周线趋势聚合 |
-| `src/portfolio/signal_ranker.py` | 10 | 接入 p_win 作为核心权重 |
-| `src/portfolio/backtest.py` | 10 | 支持 WFO 模式 |
+| `src/portfolio/signal_ranker.py` | 10, 16, 17, 18, 20 | 接入 p_win 作为核心权重；ranking profiles；滚动校准；symbol blacklist/greylist 护栏 |
+| `src/portfolio/backtest.py` | 10, 20 | 支持组合回测；透传结构性 symbol/行业护栏 |
 | `src/data_fetcher/index_benchmarks.py` | 9 | 扩充行业指数 symbol 列表 |
 | `scripts/run_backtest_single.py` | 8, 9, 13 | CLI：`--meta-label-*`、`--require-above-ma120`、`--require-weekly-bullish` |
 | `scripts/run_wfo.py` | 8, 12 | `--enable-meta-label`、`--stability-weighting`；三层热力图 |
-| `scripts/run_portfolio_backtest.py` | 10 | 新建：组合回测入口 |
+| `scripts/run_portfolio_backtest.py` | 10, 20 | 新建：组合回测入口；支持 blacklist/greylist、industry map、行业权重上限 |
 | `scripts/compare_experiments.py` | 15 | 新建：实验对比报告 |
-| `config.yaml.example` | 8, 9, 13 | 补充新增参数的示例配置 |
+| `config.yaml.example` | 8, 9, 13, 20 | 补充新增参数的示例配置 |
 | `tests/test_meta_label.py` | 8, 11 | 端到端接入回测集成测试；特征稳定性测试 |
 | `tests/test_signal_filters.py` | 9, 13 | MA120 过滤；RS60 过滤；周线过滤测试 |
 | `tests/test_wfo_params_split.py` | 12 | 稳定性选参单元测试 |

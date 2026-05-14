@@ -19,6 +19,9 @@ EXPECTED_EXPERIMENT_ARTIFACTS = (
     "wfo_summary.csv",
     "trade_attribution.csv",
     "portfolio_summary.csv",
+    "ranking_attribution.csv",
+    "ranking_attribution_summary.csv",
+    "candidate_breakdown.csv",
     "meta_label_calibration.csv",
     "feature_importance.csv",
     "regime_breakdown.csv",
@@ -249,6 +252,10 @@ def load_experiment_metrics(exp_dir: Path | str) -> dict[str, float]:
     portfolio_path = root / "portfolio_summary.csv"
     if portfolio_path.exists():
         _add_direct_summary(metrics, "portfolio", pd.read_csv(portfolio_path))
+
+    ranking_summary_path = root / "ranking_attribution_summary.csv"
+    if ranking_summary_path.exists():
+        _add_median_summary(metrics, "ranking", pd.read_csv(ranking_summary_path))
 
     calibration_path = root / "meta_label_calibration.csv"
     if calibration_path.exists():

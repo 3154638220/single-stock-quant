@@ -1,84 +1,75 @@
 <claude-mem-context>
 # Memory Context
 
-# [single-stock-quant] recent context, 2026-05-14 12:05pm GMT+8
+# [single-stock-quant] recent context, 2026-05-14 1:19pm GMT+8
 
 Legend: 🎯session 🔴bugfix 🟣feature 🔄refactor ✅change 🔵discovery ⚖️decision 🚨security_alert 🔐security_note
 Format: ID TIME TYPE TITLE
 Fetch details: get_observations([IDs]) | Search: mem-search skill
 
-Stats: 50 obs (21,073t read) | 863,164t work | 98% savings
+Stats: 50 obs (22,393t read) | 860,764t work | 97% savings
 
-### May 13, 2026
-S15 用户询问如何在 Claude Code 终端中重启，并确认使用的模型配置 (May 13, 6:47 PM)
-S17 Process architecture audit: verified claude-mem plugin model routing and identified stale processes (May 13, 6:51 PM)
-S18 单股票量化回测系统 Phase 2/4/5 多任务推进：质量评分缩放仓位、Donchian突破信号、WFO复合目标函数、增强质量评分引擎 (May 13, 6:58 PM)
-S19 用户询问进度是否已记录到 plan.md，主会话读取并更新了该文件 (May 13, 7:19 PM)
-S20 Executed docs/plan.md Phase 8 (Meta-label integration) and Phase 9 (MA120/RS60 trend filters) — the highest-ROI improvements for the single-stock-quant A-share backtest framework (May 13, 7:26 PM)
-S21 Execute docs/plan.md — implement Phase 8 (Meta-label integration), Phase 9 (MA120/RS60 trend filters), and Phase 10 (Portfolio layer with meta-label scoring, CLI, experiments) (May 13, 10:20 PM)
 ### May 14, 2026
-298 1:31a 🔴 Portfolio HTML report crash fixed — SingleStockBacktestResult now initializes all 19 required fields
-299 " 🔴 FutureWarning spam in signal_ranker.py silenced — pct_change fill_method=None and reindex fill_value=False
-300 " 🔵 Phase 10 portfolio OOS results: Meta-label + MA120 configuration underperforms baseline
-301 1:32a 🔵 Second portfolio run confirms meta-label + MA120 underperformance; HTML report now generates successfully
-S22 Execute docs/plan.md improvement plan — completed Phase 11 (meta-label features v2) and Phase 12 (WFO stability architecture upgrade) with full test verification (May 14, 1:33 AM)
-302 11:28a 🔵 Plan document structure: 15-phase improvement roadmap for single-stock-quant
-303 " 🔵 WFO module already has platform-based parameter selection with stability scoring
-304 " 🔵 Meta-label model uses L2-regularized logistic regression with 10 features from technical indicators
-305 " 🔵 15 modified files and 1 new untracked file in working tree indicate active development across the codebase
-306 11:30a 🟣 Phase 11: Eight new meta-label features added to build_signal_features()
-307 " 🟣 Test for Phase 11 features verifies all 8 new columns exist and validate bounds
-308 11:31a 🔵 Phase 12 patch application failed: file state mismatch in wfo.py nested WFO section
-309 11:32a 🟣 Phase 12: _select_stable_params() cross-fold stability selector added to wfo.py
-310 " 🟣 Phase 12 integration complete: stability-weighted parameter selection wired into nested WFO
-311 " 🔄 All Phase 11 and Phase 12 tests pass: 15 tests across test_meta_label, test_signal_features_stability, and test_wfo_params_split
-312 11:33a ✅ Plan document updated to reflect Phase 11 and Phase 12 completion
-313 " ✅ Full test suite passes: 161 tests across 24 test files, all green
-314 11:34a ✅ Plan execution complete: Phases 11 and 12 implemented and verified with full test suite
-315 " 🟣 stability_weighting parameter wired through full WFO stack with CLI flag
-316 11:35a ✅ Full test suite confirms Phases 8-12 complete: 161 tests pass with zero failures
 S23 执行 docs/plan.md 改进计划：实现阶段 13（周线多周期趋势过滤）和阶段 14（EWMA波动率动态仓位精细化），完成全部 5 步执行计划，168 个测试全绿 (May 14, 11:36 AM)
-317 11:48a 🔵 Plan execution scope revealed across single-stock-quant codebase
-318 11:49a 🔵 Stages 8-12 code completion confirmed; plan execution targets stages 13-14
-319 " ⚖️ Execution plan scoped to stages 13 (weekly trend) and 14 (EWMA/ATR position sizing)
-320 11:50a 🟣 Weekly trend aggregation module created for multi-timeframe signal filtering
-321 " 🟣 Weekly trend filter and EWMA volatility position sizing integrated into backtest engine
-322 11:51a 🟣 Stage 13/14 parameters wired through config, WFO, and CLI layers
-323 11:52a ✅ Default config and settings updated with stage 13/14 parameters
-324 " 🟣 Weekly trend unit tests created with bullish/bearish detection and lookahead bias protection
-325 " 🟣 Integration test added for weekly bullish filter blocking daily BUY in weekly downtrend
-326 11:53a 🟣 Position management and config tests extended for stage 14 EWMA/ATR features
-327 " ✅ All targeted tests pass for stages 13 and 14; plan status updated
-328 " ✅ plan.md updated with stage 13/14 completion status and verification commands
-329 11:54a 🟣 EWMA volatility CLI arguments added to both single and WFO entry points
-330 " ✅ Final plan step reached — full test suite execution begins
-331 " ✅ Trailing whitespace lint fixed in plan.md
-332 " 🟣 Stages 13-14 complete: all 168 tests pass with zero regressions
-333 11:55a 🔴 Removed overly aggressive dropna from weekly_trend _prepare_daily to prevent data loss
-334 11:56a 🟣 Plan execution complete: stages 8-14 implemented, 168 tests passing, zero regressions
-335 " ✅ Plan execution fully completed: all 5 steps done, 168 tests green
-336 11:57a 🔵 Portfolio E10 first real-data experiment produced poor OOS results
-337 " ⚖️ Four-phase experiment plan defined to improve portfolio OOS metrics after E10 failure
-338 " 🔵 New untracked files since last session: weekly_trend.py and two test files
 S24 执行 docs/plan.md — 补齐阶段 15 实验闭环与报告完善工具 (May 14, 11:57 AM)
-339 11:58a 🟣 Phase 15 implementation started: experiment comparison and report automation tools
-340 11:59a 🟣 Phase 15 experiment comparison engine implemented in src/backtest/experiment.py
-341 12:00p 🟣 Phase 15 CLI comparison script created: scripts/compare_experiments.py
-342 " 🟣 Phase 15 tests added for experiment comparison engine
-343 " 🟣 Phase 15 fully implemented: experiment comparison engine, CLI script, and tests all passing
-344 12:01p ✅ Plan.md updated: Phase 15 marked complete, all 15 phases now implemented
-345 " ✅ Full test suite passes: 168+ tests green including Phase 15 additions
-346 " 🔄 Removed unused variable in evaluate_experiment() to pass ruff lint
-347 12:02p ✅ Plan execution complete: all 15 phases implemented and tested
-S25 执行 docs/plan.md Phase 15 — 补齐实验闭环与报告完善工具 (May 14, 12:03 PM)
-**Investigated**: 确认了 plan.md 中阶段 8-14 代码层已完成，仅阶段 15 未落地。审查了现有 experiment.py、test_experiment.py 及多个 CLI 脚本以了解代码模式。发现 evaluate_experiment() 中存在一个既有的未使用变量 lint 错误。
+S25 执行 docs/plan.md Phase 15 — 补齐实验闭环与报告完善工具 (May 14, 12:02 PM)
+S26 盘点 plan.md 执行剩余缺口 — 识别代码已完成但实验和验证尚未闭环的项目 (May 14, 12:03 PM)
+S27 推进 docs/plan.md 实验闭环 — 5 变体组合回测 sweep + ranking 归因分析 + E16 重构规划 (May 14, 12:06 PM)
+S28 推进 plan.md 中的 E16 阶段：组合 ranking 重构实验 — 实现三种 ranking profile（balanced/meta_priority/dk_meta），添加 DK 红色趋势候选池约束，跑两轮真实数据实验，并更新 plan.md 文档 (May 14, 12:17 PM)
+S29 继续推进 plan.md — 实现 E17 dk_fresh_meta 新近DK候选池实验，验证"趋势未老化"假设，并更新计划文档 (May 14, 12:32 PM)
+394 12:34p 🔵 Portfolio ranking attribution reveals E10 rank score is anti-monotonic at 20-day horizon
+395 " 🔵 E16 ranking profile experiments: dk_meta shows promise but Sharpe still far below target
+396 " ⚖️ Strategy pivot: from stacking hard filters to fixing cross-sectional ranking signal
+397 " 🟣 Stages 8-16 all completed with full test coverage (174 tests passing)
+398 12:36p 🟣 New ranking profile 'dk_fresh_meta' excludes stale DK red trends older than 20 days
+399 12:37p 🟣 New 'dk_fresh_meta' ranking profile implemented — restricts candidate pool to DK red trends aged ≤ 20 days
+400 " 🟣 E17 experiment launched with new dk_fresh_meta profile to test stale trend exclusion
+401 12:39p 🔵 E17 dk_fresh_meta results: stale-trend exclusion slightly reduces MDD but degrades Sharpe and return vs dk_meta
+402 12:40p ✅ Experiment comparison infrastructure extended to include ranking attribution metrics and experiment artifact manifest
+403 " ⚖️ E17 dk_fresh_meta confirmed as regression: stale-trend exclusion degrades ranking attribution too
+404 12:41p ⚖️ Plan updated: E17 concluded as failure, E18 (rolling forward-return calibration) designated as next priority
+S30 推进 plan.md 到阶段 18 — 实现并实跑 E18 rolling forward-return calibration 实验，结论确认失败并记录战略转向 (May 14, 12:42 PM)
+405 12:52p 🔵 Plan review confirms E18 rolling forward-return calibration as next priority
+406 12:53p 🔵 E17 experiment conclusively shows narrowing DK red-trend candidates by freshness does not fix ranking quality
+407 " 🔵 Attribution pipeline measures ranking monotonicity via score-quantile forward returns
+408 12:54p 🟣 E18 rolling forward-return calibration implemented in attribution.py and signal_ranker.py
+409 12:55p 🟣 E18 dk_calibrated_meta ranking profile fully wired and tests passing; real-data backtest launched
+410 12:56p 🔵 E18 dk_calibrated_meta real-data backtest still computing after 90+ seconds
+411 12:57p 🔵 E18 rolling forward-return calibration significantly worsened portfolio performance vs E16 dk_meta baseline
+412 12:58p ⚖️ E18 rolling forward-return calibration experiment fails conclusively — ranking monotonicity remains unsolved after 5 consecutive experiments
+413 12:59p ⚖️ Pivot strategy: stop portfolio-layer ranking patches, investigate single-stock signal root causes
+S31 推进 plan.md Stage 19: 候选池根因归因 — 实现按 symbol/market regime/industry 拆解 DK 红色候选池 forward return 的诊断工具，并用 E16 dk_meta 分数完成首跑 (May 14, 12:59 PM)
+414 1:03p ⚖️ Portfolio ranking iterations E10-E18 all failed to meet targets; strategy pivot to single-stock root cause analysis
+415 " 🟣 Portfolio ranking attribution analysis tool built: scripts/analyze_portfolio_ranking.py and src/portfolio/attribution.py
+416 " 🟣 Five portfolio ranking profiles implemented in src/portfolio/signal_ranker.py
+417 " 🔵 Meta-label p_win alone is insufficient as primary ranking factor; DK candidate pool gating provides better structure
+418 " 🔵 Rolling forward-return calibration amplifies noise rather than improving ranking; dk_fresh_meta only marginally controls drawdown
+419 " 🔵 WFO IS/OOS Sharpe correlation is mostly negative across 4 of 5 stocks with WFO results
+420 " ⚖️ Next development phase: single-stock signal quality root cause analysis instead of more portfolio patches
+421 1:05p 🟣 New candidate forward return breakdown function added to attribution module for single-stock root cause analysis
+422 1:06p 🟣 New CLI script for candidate forward return breakdown analysis: scripts/analyze_candidate_breakdown.py
+423 " 🟣 Tests added for candidate forward return breakdown in test_portfolio.py
+424 " 🟣 Experiment artifact manifest updated to include candidate_breakdown.csv
+425 " 🔵 E16 dk_meta candidate breakdown reveals worst-performing stocks: 万科A, 保利发展, 海螺水泥 at 20-day horizon
+426 1:07p 🔴 Market regime classification now falls back to cross-sectional average when index OHLCV is unavailable
+427 1:08p 🔵 E16 dk_meta candidate breakdown with regime: 000002 (万科A) worst across all regimes; bull regime has highest weighted mean but bears contribute large share
+428 " ✅ Plan.md updated with Stage 19 progress: candidate pool root cause analysis complete with actionable findings
+429 " 🟣 Stage 19 complete: candidate pool root cause analysis delivered actionable diagnostic identifying worst/best stocks by symbol and regime
+430 " ✅ Full test suite passing (182 tests) after Stage 19 implementation
+S32 推进 plan.md Stage 19: 候选池根因归因 — 实现按 symbol/market regime/industry 拆解 DK 红色候选池 forward return 的诊断工具，并用 E16 dk_meta 分数完成首跑 (May 14, 1:10 PM)
+431 1:12p ⚖️ E19 root cause analysis: negative portfolio returns driven by specific weak symbols, not market regime
+432 " ⚖️ E16-E18 ranking experiments all fail to deliver positive Sharpe; strategy pivot to E20 sector/stock filtering
+433 " 🟣 New candidate pool root-cause attribution tool: analyze_candidate_breakdown.py
+434 1:13p 🟣 E20: Symbol-level blacklist/greylist filtering added to portfolio ranking pipeline
+435 1:14p 🟣 E20 CLI wiring complete: run_portfolio_backtest.py supports exclude/greylist symbols, industry map, and industry concentration caps
+436 " 🔵 Plan document confirms E16-E19 ranking experiments complete — all failed to achieve positive Sharpe; strategy pivots to E20 structural filtering
+437 1:15p 🟣 Stage 20 (E20) code implementation complete: symbol-level blacklist/greylist structural guardrails for portfolio ranking
+438 " 🟣 E20 real-data experiment launched: dk_meta profile with exclude symbols 000002,600048 and greylist 600585
+439 1:16p 🔵 E20 real-data experiment still processing: expanding-window meta-label training on 25 stocks takes significant wall time
+440 1:17p 🔵 E20 portfolio backtest runtime: expanding-window meta-label scoring for 25 stocks is IO/compute intensive (~105+ seconds and counting)
+441 " 🔵 E20 experiment results: excluding 000002/600048 and greylisting 600585 dramatically improves all portfolio metrics vs E16 baseline
+442 1:18p 🔵 E20 complete validation: 7 of 12 metrics improved vs E16, excluded symbols fully removed, ranking top-bottom positive for all horizons
+443 " 🔵 Full test suite passes: 174 tests, ruff identifies 40 pre-existing lint issues (none related to E20 changes)
 
-**Learned**: 阶段 15 需要四个核心能力：多文件实验指标加载（含中位数聚合）、指标方向感知的对比引擎、HTML/Markdown 双格式报告输出、CLI 封装。create_experiment_dir() 需要预生成 ARTIFACTS.md 和 DELTA.md。
-
-**Completed**: src/backtest/experiment.py 新增 ~260 行：EXPECTED_EXPERIMENT_ARTIFACTS 常量、load_experiment_metrics()、compare_metric_summaries()（含 CI 重叠检测）、write_delta_markdown()、render_experiment_comparison_html()，create_experiment_dir() 现在自动生成 ARTIFACTS.md 和 DELTA.md。scripts/compare_experiments.py 新建（80 行 CLI）。tests/test_experiment.py 新增 TestExperimentComparison 类（4 个测试）。docs/plan.md 更新阶段 15 状态为已完成。修复了 evaluate_experiment() 中的 F841 lint 错误。全量 pytest 173 通过，ruff 检查通过。
-
-**Next Steps**: 代码层 15 个阶段全部完成。下一步应运行 E11/E12/E13/E14/E_FINAL 真实数据实验，验证新特征、稳定选参、周线过滤和 EWMA 仓位约束是否能改善 WFO OOS 指标，并使用 scripts/compare_experiments.py 生成 DELTA 对比报告。
-
-
-Access 863k tokens of past work via get_observations([IDs]) or mem-search skill.
+Access 861k tokens of past work via get_observations([IDs]) or mem-search skill.
 </claude-mem-context>

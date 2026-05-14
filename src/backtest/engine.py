@@ -136,7 +136,8 @@ def build_limit_up_open_mask(
             mask = bool(np.isfinite(o) and np.isfinite(pc) and is_open_limit_up_unbuyable(float(o), float(pc), sym))
             rows.append({date_col: dt, sym_col: sym, "_limit_up_open": mask})
     long_mask = pd.DataFrame(rows)
-    return long_mask.pivot(index=date_col, columns=sym_col, values="_limit_up_open").fillna(False).astype(bool)
+    pivoted = long_mask.pivot(index=date_col, columns=sym_col, values="_limit_up_open")
+    return pivoted.astype("boolean").fillna(False).astype(bool)
 
 
 def build_open_to_open_returns(

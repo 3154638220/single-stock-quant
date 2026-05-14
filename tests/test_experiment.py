@@ -55,6 +55,9 @@ class TestExperimentDir:
     def test_expected_artifacts_include_phase15_outputs(self):
         artifacts = expected_experiment_artifacts()
         assert "portfolio_summary.csv" in artifacts
+        assert "ranking_attribution.csv" in artifacts
+        assert "ranking_attribution_summary.csv" in artifacts
+        assert "candidate_breakdown.csv" in artifacts
         assert "meta_label_calibration.csv" in artifacts
         assert "feature_importance.csv" in artifacts
         assert "stability_heatmap.html" in artifacts
@@ -115,6 +118,9 @@ class TestExperimentComparison:
         pd.DataFrame(
             [{"annualized_return": 0.08, "sharpe_ratio": 0.75, "max_drawdown": 0.25}]
         ).to_csv(exp / "portfolio_summary.csv", index=False)
+        pd.DataFrame(
+            [{"horizon": 20, "top_minus_bottom": 0.01, "bucket_return_corr": 0.5}]
+        ).to_csv(exp / "ranking_attribution_summary.csv", index=False)
 
         metrics = load_experiment_metrics(exp)
 
@@ -122,6 +128,7 @@ class TestExperimentComparison:
         assert metrics["batch_median_sharpe_ratio"] == 0.4
         assert metrics["batch_median_max_drawdown"] == 0.25
         assert metrics["portfolio_sharpe_ratio"] == 0.75
+        assert metrics["ranking_median_top_minus_bottom"] == 0.01
 
     def test_compare_metric_summaries_marks_lower_drawdown_as_improved(self):
         rows = compare_metric_summaries(

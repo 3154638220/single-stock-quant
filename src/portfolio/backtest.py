@@ -33,8 +33,13 @@ def run_portfolio_backtest(
     initial_capital: float = 100_000.0,
     meta_label_scores: pd.DataFrame | None = None,
     min_meta_score: float | None = None,
+    ranking_profile: str = "balanced",
+    dk_params: DKTrendParams | None = None,
     require_above_ma120: bool = False,
     require_positive_rs60: bool = False,
+    exclude_symbols: list[str] | tuple[str, ...] | set[str] | None = None,
+    greylist_symbols: list[str] | tuple[str, ...] | set[str] | None = None,
+    greylist_score_scale: float = 0.50,
 ) -> dict[str, Any]:
     """Run a portfolio-level backtest on the watchlist cross-section.
 
@@ -64,11 +69,16 @@ def run_portfolio_backtest(
         df,
         index_ohlcv=index_ohlcv,
         meta_label_scores=meta_label_scores,
+        ranking_profile=ranking_profile,
+        dk_params=dk_params,
         date_col=date_col,
         sym_col=sym_col,
         require_above_ma120=require_above_ma120,
         require_positive_rs60=require_positive_rs60,
         min_meta_score=min_meta_score,
+        exclude_symbols=exclude_symbols,
+        greylist_symbols=greylist_symbols,
+        greylist_score_scale=greylist_score_scale,
     )
 
     # Allocate
