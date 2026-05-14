@@ -24,6 +24,7 @@
 | 阶段 18：滚动 forward-return 校准 | 已完成（首版 + E18 实跑） | `ranking_profile=dk_calibrated_meta` 在 DK 红色候选池上叠加滚动 score bucket forward-return 校准；校准只使用当日以前已完整可观测的历史 forward return；CLI/config 已接线 | `pytest tests/test_portfolio.py -q` 与 ruff 通过；E18 已输出组合与 ranking 归因 |
 | 阶段 19：候选池根因归因 | 已完成（首版 + E19 首跑） | 新增 `compute_candidate_forward_return_breakdown()` 与 `scripts/analyze_candidate_breakdown.py`，按 symbol / market regime / industry 拆解候选池 forward return；benchmark 缺失时用 watchlist 等权收盘代理 regime | `pytest tests/test_portfolio.py tests/test_experiment.py -q` 与 ruff 通过；E16 `candidate_breakdown.csv` 已输出 |
 | 阶段 20：结构性 symbol/行业护栏 | 已完成（首版 + E20 首跑） | `rank_signals()` 支持 `exclude_symbols` 与 `greylist_symbols`；组合回测和 CLI 支持 blacklist/greylist、行业映射 CSV 与 `max_per_industry`；config 示例已接线 | `pytest tests/test_portfolio.py tests/test_experiment.py -q` 与 ruff 通过；E20 已输出组合与归因 |
+| 阶段 24：信号驱动选股 + 趋势持仓 | 已完成（首版 + E24a–e 实跑） | `run_portfolio_backtest()` 支持 `backtest_mode=signal_driven`；三种入场模式（dk_red/fresh_red/buy_signal）；止损/移动止损/ATR 止损退出；CLI 已接线 | `pytest -q` 通过；E24a–e 已输出组合结果；纯信号驱动模式无法匹配 E21 每日排名基准 |
 
 阶段 10 首次真实数据实验已完成：`python scripts/run_portfolio_backtest.py --watchlist configs/watchlist_25.txt --start 2020-01-01 --end 2026-05-08 --n-top 5 --enable-meta-label --require-above-ma120 --export-summary data/output/portfolio_final.csv --export-weights data/output/portfolio_final_weights.csv --export-scores data/output/portfolio_final_scores.csv --export-html`。
 
@@ -274,6 +275,282 @@ Greylist 命中率验证（20 日 horizon，-3% 阈值）：
 - 整体 greylist 率：9.2%
 
 **阶段性判断**：滚动灰名单是迄今最有效的单股过滤机制，相对静态黑名单（E20）Sharpe 提升 30%、最大回撤降低 4.2pct。但 Sharpe 0.28 仍远低于 0.75 目标，说明仅靠过滤负期望标的无法完全解决问题——还需要提升正期望标的的收益捕获能力。下一步方向应考虑：(1) 提高正贡献标的（300750/300059/002594）的持仓权重集中度，(2) 行业轮动或行业相对强弱过滤，(3) 单股层 meta-label 模型质量提升。
+
+### 0.8 阶段 22 推进更新（2026-05-14）
+
+已完成 E22 代码入口和首轮实验。核心新增能力：**行业相对强弱（Industry RS）轮动**——用 watchlist 内股票等权合成行业指数，计算行业相对市场的 RS 比率，将 RS 乘法因子叠加到 rank score 进行行业倾斜；**分数加权分配**（`allocate_score_weighted`）——按 rank score 比例分配仓位，top 股票在分数优势时可突破 `max_per_stock` 上限。
+
+新增 `dk_industry_rs` ranking profile 与独立 CLI 参数：
+
+```bash
+python scripts/run_portfolio_backtest.py \
+  --watchlist configs/watchlist_25.txt \
+  --start 2020-01-01 --end 2026-05-08 \
+  --n-top 3 \
+  --enable-meta-label \
+  --ranking-profile dk_meta \
+  --exclude-symbols 000002,600048 \
+  --rolling-greylist-lookback 252 \
+  --rolling-greylist-horizon 20 \
+  --rolling-greylist-threshold -0.03 \
+  --rolling-greylist-scale 0.0 \
+  --rolling-greylist-min-samples 8 \
+  --industry-map configs/industry_map.csv \
+  --enable-industry-rs \
+  --industry-rs-strength 0.35 \
+  --allocation-method score_weighted \
+  --adaptive-max-per-stock 0.35
+```
+
+E22 实验矩阵（均基于 E21 最佳配置：dk_meta + exclude 000002/600048 + rolling greylist）：
+
+| 实验目录 | 配置摘要 | 年化收益 | Sharpe | Calmar | 最大回撤 | 平均持仓 | 相对 E21 |
+|---|---|---|---:|---:|---:|---:|---:|---|
+| `E21_rolling_20d` | E21 基准 | 3.62% | 0.278 | 0.092 | 39.35% | 2.83 | 基准 |
+| `E22_industry_rs` | industry RS ×0.35 + score_weighted + adaptive cap 0.35 | 2.20% | 0.21 | 0.05 | 40.97% | 2.8 | 12 指标中 0 改善 |
+| `E22a_score_weighted` | score_weighted + adaptive cap 0.35（无 industry RS） | 3.53% | 0.27 | 0.09 | 39.75% | 2.8 | 与 E21 持平，微劣 |
+| `E22b_ind_rs_profile` | dk_industry_rs profile + industry RS ×0.25 + equal weight | 2.35% | 0.22 | 0.06 | 39.16% | 2.8 | 0 改善 |
+| `E22c_ind_rs_penalty` | industry RS ×0.50 + equal weight | 3.12% | 0.25 | 0.09 | 36.22% | 2.8 | MDD 改善 3.1pct，但收益降 0.5pct |
+| `E22d_ind_rs_filter` | industry RS ×1.5（近似硬过滤） | 3.12% | 0.25 | 0.08 | 39.33% | 2.8 | 与 E22c 类似 |
+
+Ranking 归因（E22_industry_rs）相对 E21 微幅改善：
+- 1 日 top-bottom: +0.03pct (E21: +0.02pct)
+- 5 日 top-bottom: +0.40pct (E21: +0.29pct)
+- 20 日 top-bottom: +0.39pct (E21: +0.37pct)
+
+但组合收益反而下降，说明行业 RS 倾斜造成了过度的行业集中风险——当强势行业反转时，集中持仓遭受更大损失。
+
+**阶段性判断**：行业 RS 轮动和分数加权分配都无法超越 E21 基准。行业 RS 的 20/60/120 日动量窗口太慢，当行业 RS 确认强势时趋势往往已接近尾声；分数加权分配在 top-3 的狭窄候选范围内无差别。三条路径中两条（仓位集中、行业 RS）已初步验证无效。
+
+**下一步应聚焦单股层 meta-label 模型质量提升**。当前 p_win 预测能力弱（E16 显示单纯提升 p_win 权重反而恶化结果），根本原因是 `build_signal_features()` 的特征全部来自技术面短期指标，缺少对信号质量的区分能力。Stage 23 应着手：
+
+### 0.9 阶段 23 推进更新（2026-05-14）
+
+已完成 E23 代码入口和首轮实验。核心新增能力：**Meta-label 模型质量 v2**——新增 `label_type="profit_aware"`（要求持仓期内最大回撤 < 8% 且最终盈利才标为 1）；新增 8 个信号入场质量特征（entry_distance_ma20_atr、close_in_20d_range、trend_alignment、consecutive_up_5、pullback_from_high10、volume_trend、dk_run_len、dk_is_red）；`build_signal_features()` 接受可选 `dk_trend_state` 参数以注入 DK 趋势上下文。
+
+```bash
+python scripts/run_portfolio_backtest.py \
+  --watchlist configs/watchlist_25.txt \
+  --start 2020-01-01 --end 2026-05-08 \
+  --n-top 3 \
+  --enable-meta-label \
+  --ranking-profile dk_meta \
+  --exclude-symbols 000002,600048 \
+  --rolling-greylist-lookback 252 \
+  --rolling-greylist-horizon 20 \
+  --rolling-greylist-threshold -0.03 \
+  --rolling-greylist-scale 0.0 \
+  --rolling-greylist-min-samples 8
+```
+
+E23 实验结果对比：
+
+| 实验目录 | 配置摘要 | 年化收益 | Sharpe | Calmar | 最大回撤 | 平均持仓 | 相对 E21 |
+|---|---|---|---:|---:|---:|---:|---:|---|
+| `E21_rolling_20d` | dk_meta + 滚动灰名单 + 排除 000002/600048 + meta-label | 3.62% | 0.278 | 0.092 | 39.35% | 2.83 | 基准 |
+| `E23_meta_label_v2` | E21 + profit_aware 标签 + 信号入场特征 | 2.79% | 0.24 | 0.06 | 48.30% | 2.8 | 全面恶化 |
+| `E23c_no_meta` | E21 去掉 meta-label（无 p_win） | -1.05% | 0.05 | -0.02 | 54.39% | 2.8 | 收益坍塌，证明 p_win 排序必要 |
+
+E23 ranking 归因（profit_aware 标签）全面恶化：
+- 1 日 top-bottom: -0.03pct (E21: +0.02pct)
+- 5 日 top-bottom: +0.05pct (E21: +0.29pct)
+- 20 日 top-bottom: -0.02pct (E21: +0.37pct)
+
+**阶段性判断**：meta-label 模型的"改进"（profit_aware 标签、新入场特征）实际上弱化了 p_win 的排序能力。profit_aware 标签过于严格（要求不触发大幅回撤 + 终值盈利），导致正样本稀疏、模型学到噪声而非规律。但 E23c 证明去掉 p_win 后收益直接转负——meta-label p_win 虽不完美，但在 DK 红色候选池内是唯一有效的排序信号。
+
+**E16–E23 全局复盘**：
+
+| 方向 | 实验 | 结论 |
+|---|---|---|
+| 过滤器叠加 | E10, E11, E12, E13, E14 | MA120/RS60/周线/EWMA 过滤均未改善组合 Sharpe |
+| 组合 ranking 重构 | E16, E17, E18 | 仅 `dk_meta`（DK 红色池 + p_win 排序）有效；`dk_fresh_meta`、`dk_calibrated_meta` 均劣化 |
+| 根因归因 | E19 | 负期望来自特定 symbol/行业，非 ranking 权重问题 |
+| 结构性护栏 | E20, E21 | 静态排除 + 滚动灰名单最有效（Sharpe +145% vs E16） |
+| 行业 RS 轮动 | E22 | 行业 RS 乘法倾斜恶化组合，行业动量窗口太慢 |
+| Meta-label 改进 | E23 | 新标签/特征弱化排序能力；原版 profit 标签最优 |
+
+**下一步方向**：三条路径（仓位集中、行业 RS、meta-label 改进）均已验证。需要换一个思路——当前组合回测的"每日重排名、每日调仓"模式可能本身就是问题。DK 红色趋势内的每日排名不可靠（ranking bucket 单调性始终未转正），但趋势方向本身是可靠的。应考虑**从"每日横截面排名"转向"信号驱动选股 + 趋势持仓"**的混合模式：
+- 只在 DK 刚转红（或 BUY 信号日）时评估入场，而不是每天排名
+- 入场后持仓至 DK 转绿或触发止损
+- 组合层面做持仓管理和风控，而不是每日重新选股
+
+这将作为阶段 24 的探索方向。
+
+### 0.10 阶段 24 推进更新（2026-05-14）
+
+已完成 E24 代码入口和首轮实验。核心新增能力：**信号驱动选股 + 趋势持仓**（`backtest_mode=signal_driven`）——替代每日横截面排名，改为 DK 红/BUY 信号日进入，持仓至 DK 绿/止损/移动止损退出。
+
+新增参数与 CLI：
+
+```bash
+python scripts/run_portfolio_backtest.py \
+  --watchlist configs/watchlist_25.txt \
+  --start 2020-01-01 --end 2026-05-08 \
+  --n-top 3 \
+  --enable-meta-label \
+  --exclude-symbols 000002,600048 \
+  --rolling-greylist-lookback 252 \
+  --rolling-greylist-horizon 20 \
+  --rolling-greylist-threshold -0.03 \
+  --rolling-greylist-scale 0.0 \
+  --rolling-greylist-min-samples 8 \
+  --backtest-mode signal_driven \
+  --entry-mode buy_signal \
+  --stop-loss-pct 0.10 \
+  --trailing-stop-pct 0.15
+```
+
+关键参数：
+| 参数 | 作用 |
+|---|---|
+| `--backtest-mode signal_driven` | 启用信号驱动组合回测，替代每日排名 |
+| `--entry-mode dk_red/fresh_red/buy_signal` | 入场规则：DK 红 / 新近 DK 红（run_len≤N）/ BUY 信号 |
+| `--entry-max-run-len` | fresh_red 模式下的最大 run_len |
+| `--stop-loss-pct` / `--trailing-stop-pct` / `--atr-stop-multiplier` | 止损/移动止损/ATR 止损 |
+
+E24 实验矩阵（均基于 E21 最佳配置：exclude 000002/600048 + rolling greylist）：
+
+| 实验目录 | 配置摘要 | 年化收益 | Sharpe | Calmar | 最大回撤 | 平均持仓 | 相对 E21 |
+|---|---|---|---:|---:|---:|---:|---:|---|
+| `E21_rolling_20d` | dk_meta 每日排名 + 滚动灰名单 + 排除 | 3.62% | 0.278 | 0.092 | 39.35% | 2.83 | 基准 |
+| `E24_signal_driven_base` | dk_red 入场 + DK 绿退出 | -5.10% | -0.04 | -0.07 | 72.12% | 2.8 | 全面恶化 |
+| `E24b_signal_driven_stops` | dk_red 入场 + DK 绿/止损 8%/移动 12%/ATR 2x 退出 | -5.72% | -0.07 | -0.08 | 72.54% | 2.8 | 止损加剧恶化 |
+| `E24c_fresh_red` | fresh_red(run_len≤3) 入场 + DK 绿退出 | -4.17% | -0.10 | -0.07 | 60.57% | 2.6 | MDD 改善但收益仍负 |
+| `E24d_buy_signal` | BUY 信号入场 + DK 绿退出 | -0.43% | 0.10 | -0.01 | 53.80% | 2.5 | 最佳信号驱动变体 |
+| `E24e_buy_signal_stops` | BUY 信号入场 + DK 绿/止损 10%/移动 15% 退出 | -1.22% | 0.07 | -0.02 | 55.99% | 2.5 | 宽止损轻微改善 |
+
+E24 相对 E21 的 DELTA 摘要（取最佳变体 E24d）：
+
+| Metric | E21 | E24d | Delta % |
+|---:|---:|---:|---:|
+| Sharpe | 0.278 | 0.10 | -64% |
+| Calmar | 0.092 | -0.01 | -111% |
+| Max DD | 39.35% | 53.80% | +37% |
+| Annualized Return | 3.62% | -0.43% | -112% |
+
+**阶段性判断**：纯信号驱动模式在所有变体下均无法匹配 E21 的每日排名基准。核心原因：
+
+1. **DK 红/绿太慢**：DK 绿色退出信号滞后于价格拐点，持仓会经历完整的趋势+反转周期。在 2020-2026 年 A 股高波动、快轮动的市场结构中，等待 DK 转绿意味着承受大幅回撤。
+2. **止损加剧亏损**：8-15% 的止损在 A 股高波动中被频繁触发，但无法区分"暂时回调"和"趋势反转"，导致止损在反转前平仓——错过随后的反弹。
+3. **每日重排名的风险管理价值被低估**：E21 的成功不在于排名分数的预测能力（ranking bucket 单调性从未转正），而在于每日重排名提供了**持续的风险再评估**——弱势持仓被更快替换，滚动的灰名单效应逐日累积。
+4. **BUY 信号入场优于 DK 红**：`buy_signal` 模式（年化 -0.43%）显著优于 `dk_red`（年化 -5.10%），说明信号驱动的入场时机选择有一定价值，但离场机制必须更敏捷。
+
+**方向校准**：不应继续在"纯信号驱动"和"纯每日排名"之间二选一。下一步应考虑**混合模式**：
+- **入场**：仅在 BUY 信号日评估入场（信号驱动入场时机），不在每日排名中随意进入
+- **持仓**：每日重新排名评估——若持仓标的跌出 top-N 或触发滚动灰名单，提前退出（排名驱动风险管理）
+- **出场**：保留 DK 绿和止损作为兜底出场条件
+
+这将作为阶段 25 的探索方向。同时应重新审视单股层信号质量——E24 证明了当前 DK 趋势的"持有到反转"模式不可行，单股回测的 MDD 47% 也在说同一个问题：趋势方向可靠但出场时机太慢。可能需要：
+- 单股层引入更敏感的出场条件（如趋势强度衰减、MACD 柱体转负）
+- 用 profit_aware 标签重新训练 meta-label 时，不以"盈利/亏损"为目标，而以"是否应在今日出场"为目标
+
+### 0.11 阶段 25 推进更新（2026-05-14）
+
+已完成 E25 代码入口。核心新增能力：**混合回测模式**（`backtest_mode=hybrid`）——信号驱动入场 + 排名驱动出场 + 趋势衰减退出。
+
+CLI 示例：
+
+```bash
+python scripts/run_portfolio_backtest.py \
+  --watchlist configs/watchlist_25.txt \
+  --start 2020-01-01 --end 2026-05-08 \
+  --n-top 3 \
+  --enable-meta-label \
+  --ranking-profile dk_meta \
+  --exclude-symbols 000002,600048 \
+  --rolling-greylist-lookback 252 \
+  --rolling-greylist-horizon 20 \
+  --rolling-greylist-threshold -0.03 \
+  --rolling-greylist-scale 0.0 \
+  --rolling-greylist-min-samples 8 \
+  --backtest-mode hybrid \
+  --entry-mode buy_signal \
+  --exit-ranking-multiplier 1.0
+```
+
+**混合模式设计**：
+
+| 阶段 | 机制 | 说明 |
+|---|---|---|
+| 入场 | 信号驱动 | 仅在 BUY 信号日评估入场（可切换 dk_red/fresh_red/buy_signal），使用 `rank_signals()` 横截面分数排序 |
+| 持仓 | 每日重新排名 | 每日对持仓标的重新排名；若排名跌出 top-N 或触发滚动灰名单，提前退出 |
+| 出场兜底 | DK 绿 + 止损 | 保留 DK 绿、止损、移动止损、ATR 止损作为兜底出场条件 |
+| 趋势衰减退出 | dk_value/peak 比例 | 新增 `exit_trend_weakening_threshold`：若 MACD 柱体从持仓期峰值衰减超过阈值，触发退出 |
+
+**新增参数**：
+
+| 参数 | 默认值 | 作用 |
+|---|---|---|
+| `--backtest-mode hybrid` | — | 启用混合回测模式 |
+| `--exit-ranking-multiplier` | 1.0 | 退出排名倍数：exit if rank > n_top × multiplier（0=禁用） |
+| `--exit-trend-weakening-threshold` | 0.0 | 趋势衰减退出阈值：exit if dk_value/peak < threshold（0=禁用） |
+
+**代码架构变更**：
+- 提取 `_precompute_signal_data()` 共用预计算函数（symbol 对齐数组、滚动灰名单），同时被 `_build_signal_driven_weights()` 和 `_build_hybrid_weights()` 复用
+- 新增 `dk_value` 字段暴露到预计算数据中（MACD 柱体值，此前仅在指标层计算，从未接入回测）
+- 混合模式输出 `scores` 为 `rank_signals()` 完整横截面分数（非稀疏），便于归因分析
+- 测试：新增 7 个混合模式单元测试
+
+**关键设计决策**：
+- 混合模式默认 `entry_mode=buy_signal`（非 dk_red），基于 E24 实验结论：BUY 信号入场显著优于任意 DK 红日入场
+- 排名驱动退出使用严格计数：`rank = 1 + count(scores > sym_score)`，平局不触发退出
+- 趋势衰减仅当 `dk_value > 0` 且 `peak > 0` 时生效（避免 DK 绿之前的误触发）
+- `_precompute_signal_data()` 的加入使 `dk_value` 可用于所有模式（未来可在 signal_driven 中接入趋势强度评分）
+
+### 0.12 阶段 25 推进更新（2026-05-14）
+
+已完成 E25 代码入口和全部实验变体。混合模式（`backtest_mode=hybrid`）：信号驱动入场 + 排名驱动出场 + 趋势衰减退出。
+
+E25 实验矩阵（均基于 E21 最佳配置：exclude 000002/600048 + rolling greylist）：
+
+| 实验目录 | 配置摘要 | 年化收益 | Sharpe | Calmar | 最大回撤 | 平均持仓 | 调仓日 |
+|---|---|---|---:|---:|---:|---:|---:|---:|
+| `E21_rolling_20d` | dk_meta 每日排名 + 滚动灰名单 + 排除 | 3.62% | 0.278 | 0.092 | 39.35% | 2.83 | 1535 |
+| `E25_hybrid_base` | buy_signal 入场 + 排名退出(1x) | -13.61% | -1.214 | -0.227 | 60.01% | 1.19 | 999 |
+| `E25b_hybrid_trend_exit` | buy_signal 入场 + 趋势衰减退出(0.50) | -10.23% | -0.541 | -0.165 | 62.07% | 2.07 | 604 |
+| `E25c_hybrid_loose_rank` | buy_signal 入场 + 止损 8%/移动 12%，无额外退出 | 0.18% | 0.111 | 0.003 | 51.87% | 2.35 | 475 |
+
+E25 vs E21 DELTA：0 个指标改善，7 个恶化，5 个持平。
+
+**关键发现**：
+
+1. **排名退出是破坏性的**：`exit_ranking_multiplier=1.0`（E25）导致 Sharpe 从 E21 的 +0.278 降至 -1.214。排名退出在正常技术回调时强制平仓，造成系统性的"高买低卖"。
+
+2. **趋势衰减退出同样失败**：`exit_trend_weakening_threshold=0.50`（E25b）虽然比排名退出温和（Sharpe -0.541），但 MACD 柱体自然波动频繁触发 50% 衰减条件，导致提前退出强趋势。
+
+3. **E25c 验证代码正确性**：禁用排名退出和趋势衰减后（仅 buy_signal 入场 + 止损），E25c 与 E24d 高度一致（Sharpe 0.111 vs 0.10），确认混合模式基础架构无误。
+
+4. **混合模式的根本矛盾**：
+   - buy_signal 入场日仅 475 天（vs 1535 个交易日），意味着 69% 的时间持有现金
+   - DK 绿色退出太慢，但任何加速退出的尝试（排名、趋势衰减）都会在回调时误杀
+   - E21 的核心优势不在于排名的预测能力（bucket 单调性从未转正），而在于**每日重排名提供的持续风险再评估和频繁轮动**——这是信号驱动模式无法复制的
+
+**全局审视（E10–E25）**：
+
+经过 16 轮实验（E10 至 E25），覆盖了六条改进路径：
+
+| 路径 | 实验 | 最佳结果 | 相对 E10 基准 |
+|---|---|---|---|
+| 过滤器叠加 | E10, E_FINAL | Sharpe 0.06 | 基准 |
+| WFO/特征/多周期 | E11–E14 | — | 未改善组合指标 |
+| 组合 ranking 重构 | E16–E18 | E16 dk_meta Sharpe 0.114 | 小幅改善 |
+| 根因归因 + 结构性护栏 | E19–E21 | **E21 Sharpe 0.278** | **最佳** |
+| 行业 RS + 仓位集中 | E22 | 无法超越 E21 | 无效 |
+| Meta-label 改进 | E23 | 弱化排序能力 | 退化 |
+| 信号驱动/混合模式 | E24–E25 | 无法匹配 E21 | 无效 |
+
+**核心矛盾已明确**：所有改进都集中在组合层（ranking 重构、过滤、护栏、退出机制），但单股层的信号质量从未实质提升：
+- Meta-label p_win 预测能力弱（E16 提高 p_win 权重反恶化结果，E23 新特征削弱能力）
+- DK 趋势方向可靠但出场时机太慢（单股 MDD 47%，组合 MDD 39%）
+- Ranking bucket 单调性在 16 轮实验中**从未转正**——每日横截面排名本质上不可靠
+
+**下一步方向校准**：不应继续在组合层叠加补丁。两条可能的突破路径：
+
+1. **单股层深度改造**：重新定义 meta-label 标签目标（不以"盈利/亏损"为目标，而以"是否应在今日出场"或"持仓期 Sharpe"为目标）；引入更敏感的出场条件替代 DK 绿（如 dk_value 连续 N 日下降、价格跌破入场后的动态止损线）；考虑用 LightGBM + 更丰富的截面特征替换逻辑回归。
+
+2. **接受每日排名的随机性，转向 ensemble 思维**：同时运行多个 ranking profile（dk_meta、dk_calibrated_meta 等），按 ensemble 分数分配仓位，减少单一排名的过拟合风险。
+
+优先探索路径 1，因为它是所有组合层改进的前提——没有可靠的个股信号质量，任何 ranking 方案都在随机排序。
 
 ---
 
@@ -905,6 +1182,12 @@ python scripts/compare_experiments.py \
 | E19 | DK 候选池根因归因 | 负期望来自特定 symbol/行业/regime，而不是 ranking 权重本身 | `attribution.py`, `analyze_candidate_breakdown.py` | 找到稳定负贡献 symbol/行业 | 输出 `candidate_breakdown.csv`，形成 E20 过滤假设 |
 | E20 | Symbol/行业结构护栏 | E19 识别的稳定负期望 symbol/行业拖累组合风险收益 | `signal_ranker.py`, `run_portfolio_backtest.py` | — | MDD 不高于 E16，Sharpe/Calmar 不下降，正贡献标的不被误伤 |
 | E21 | 滚动 symbol 灰名单 | 动态识别并抑制滚动窗口内持续负期望标的，比静态黑名单更适应市场变化 | `signal_ranker.py`, `run_portfolio_backtest.py` | — | Sharpe ≥ 0.25，MDD ≤ 40%，正贡献标的 greylist 率 < 5% |
+| E24a | 信号驱动 dk_red 入场 + DK 绿退出 | 每日排名噪声可通过信号驱动入场+趋势持仓消除 | `backtest.py`, `run_portfolio_backtest.py` | — | 未达目标，全面劣于 E21 |
+| E24b | 信号驱动 dk_red + 止损退出 | 止损可控制持仓回撤 | `backtest.py`, `run_portfolio_backtest.py` | — | 止损加剧亏损，劣于 E24a |
+| E24c | 信号驱动 fresh_red 入场 | 仅新近 DK 红入场可避免趋势尾部风险 | `backtest.py`, `run_portfolio_backtest.py` | — | MDD 改善但仍远低于 E21 |
+| E24d | 信号驱动 buy_signal 入场 | BUY 信号时机优于任意 DK 红日 | `backtest.py`, `run_portfolio_backtest.py` | — | 最佳信号驱动变体，但年化仍为负 |
+| E24e | 信号驱动 buy_signal + 宽止损 | 宽止损可减少错误止损 | `backtest.py`, `run_portfolio_backtest.py` | — | 轻微改善但无法匹配 E21 |
+| E25 | 混合模式（buy_signal 入场 + 排名驱动出场 + 趋势衰减退出） | 信号入场时机 + 每日排名风险管理，结合两者优势 | `backtest.py`, `run_portfolio_backtest.py` | 全部恶化 | 排名退出破坏性最强（Sharpe -1.21），趋势衰减同样失败（-0.54），验证变体接近 E24d（+0.11）；混合模式无法复制每日排名的持续风险再评估优势 |
 | E_FINAL | 全部开关组合最优配置 | 各改进叠加效果验证 | 所有 | Sharpe ≥ 0.40 | Sharpe ≥ 0.75 |
 
 ---
@@ -1044,7 +1327,8 @@ python scripts/run_backtest_single.py --symbol 300750 \
 | `src/features/sector_features.py` | 9 | 新建：行业相对强度特征 |
 | `src/features/weekly_trend.py` | 13 | 新建：周线趋势聚合 |
 | `src/portfolio/signal_ranker.py` | 10, 16, 17, 18, 20 | 接入 p_win 作为核心权重；ranking profiles；滚动校准；symbol blacklist/greylist 护栏 |
-| `src/portfolio/backtest.py` | 10, 20 | 支持组合回测；透传结构性 symbol/行业护栏 |
+| `src/portfolio/backtest.py` | 10, 20, 24, 25 | 支持组合回测；透传结构性 symbol/行业护栏；信号驱动模式（`signal_driven`）；混合模式（`hybrid`）——已实验，混合模式无法匹配每日排名基准 |
+| `src/portfolio/allocator.py` | 22, 25 | 分数加权分配（`score_weighted`）；混合模式的预计算信号数据 |
 | `src/data_fetcher/index_benchmarks.py` | 9 | 扩充行业指数 symbol 列表 |
 | `scripts/run_backtest_single.py` | 8, 9, 13 | CLI：`--meta-label-*`、`--require-above-ma120`、`--require-weekly-bullish` |
 | `scripts/run_wfo.py` | 8, 12 | `--enable-meta-label`、`--stability-weighting`；三层热力图 |
@@ -1076,13 +1360,31 @@ python scripts/run_backtest_single.py --symbol 300750 \
 
 ## 10. 执行优先级清单
 
+### 10.1 已完成（E10–E25，2026-05-14）
+
+1. ~~接入 Meta-label~~——已接入 single_stock.py 和 WFO，但 p_win 预测能力弱（E16 提高权重恶化结果）
+2. ~~MA120 + RS60 过滤~~——已实现，未能改善组合 Sharpe（E_FINAL 变体均劣于 E10）
+3. ~~运行 Portfolio 回测脚本~~——首跑 E10（Sharpe 0.06），后续 16 轮实验
+4. ~~WFO 稳定性加权~~——已完成，未改善组合层指标
+5. ~~新增 Meta-label 特征~~——E11 已完成；E23 v2 版本弱化排序能力
+6. ~~周线趋势过滤~~——已完成，未改善组合指标
+7. ~~统一仓位决策树 + EWMA 波动率~~——已完成，未改善组合指标
+8. ~~实验对比报告自动化~~——已完成 `compare_experiments.py`
+9. ~~信号驱动选股 + 趋势持仓~~——E24/E25 已实验，全系无法匹配每日排名基准
+
+### 10.2 下一阶段优先级
+
+经过 16 轮实验验证，组合层改进（ranking 重构、过滤、护栏、退出机制）已接近极限。E21（滚动灰名单 + 静态排除）是最佳配置（Sharpe 0.278），但仍远低于目标（Sharpe 0.75）。
+
+**根本瓶颈在单股层信号质量**：
+- Meta-label p_win 预测能力弱
+- DK 趋势方向可靠但出场太慢（MDD 47%）
+- Ranking bucket 单调性从未转正
+
 按 ROI 从高到低：
 
-1. **接入 Meta-label**（`single_stock.py` + `wfo.py`）——模型已有，只差最后一步，ROI 极高
-2. **MA120 + RS60 过滤**——可直接切断 Bottom 5 的主要亏损来源，实现简单
-3. **运行 Portfolio 回测脚本**——填补最大数据空白，验证组合 Sharpe 假设
-4. **WFO 稳定性加权**——修正 IS/OOS 负相关问题，让参数选择更可信
-5. **新增 Meta-label 特征**（52W、Beta、加速度、量价相关）——提升模型表达力
-6. **周线趋势过滤**——进一步减少震荡市假信号
-7. **统一仓位决策树 + EWMA 波动率**——精细化风控，压低尾部回撤
-8. **实验对比报告自动化**——提升研究效率，不直接创造 Alpha
+1. **重新定义 Meta-label 标签目标**（`meta_label.py`）——当前"盈利/亏损"二分类标签信息量低。尝试：持仓期 Sharpe 回归、出场时机分类（是否应在今日出场 > 止损线）、profit_aware 标签的正负样本平衡
+2. **替代 DK 绿色出场条件**（`single_stock.py`）——DK 绿太慢。加入：dk_value 连续 N 日递减、MACD 柱体转负 N 日、价格低于入场价 + ATR×N
+3. **单股特征工程 v3**（`meta_label.py`）——当前 16 个特征全部来自技术面短期指标。加入：行业相对强弱、个股 Sigma（CAPM 残差波动率）、滚动 Sharpe、日内振幅分位
+4. **Ensemble ranking**（`signal_ranker.py`）——同时运行 3+ 个 ranking profile，按 ensemble 分数分配仓位，减少单一排名的过拟合
+5. **样本加权训练**（`meta_label.py`）——WFO fold 内训练样本按近期 OOS forward return 加权，而非等权

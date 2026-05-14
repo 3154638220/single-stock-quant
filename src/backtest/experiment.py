@@ -18,10 +18,6 @@ EXPECTED_EXPERIMENT_ARTIFACTS = (
     "batch_summary.csv",
     "wfo_summary.csv",
     "trade_attribution.csv",
-    "portfolio_summary.csv",
-    "ranking_attribution.csv",
-    "ranking_attribution_summary.csv",
-    "candidate_breakdown.csv",
     "meta_label_calibration.csv",
     "feature_importance.csv",
     "regime_breakdown.csv",
@@ -212,14 +208,6 @@ def _numeric_columns(df: pd.DataFrame) -> list[str]:
     return cols
 
 
-def _add_direct_summary(metrics: dict[str, float], prefix: str, df: pd.DataFrame) -> None:
-    if df.empty:
-        return
-    row = df.iloc[0]
-    for col in _numeric_columns(df):
-        metrics[f"{prefix}_{col}"] = _safe_float(row[col])
-
-
 def _add_median_summary(metrics: dict[str, float], prefix: str, df: pd.DataFrame) -> None:
     if df.empty:
         return
@@ -231,9 +219,8 @@ def _add_median_summary(metrics: dict[str, float], prefix: str, df: pd.DataFrame
 def load_experiment_metrics(exp_dir: Path | str) -> dict[str, float]:
     """Load comparable numeric metrics from a standard experiment directory.
 
-    The loader is intentionally tolerant: missing files are ignored, portfolio
-    summaries are treated as one-row metric snapshots, and batch/WFO summaries
-    are aggregated by median across symbols or folds.
+    The loader is intentionally tolerant: missing files are ignored, and
+    batch/WFO summaries are aggregated by median across symbols or folds.
     """
     root = Path(exp_dir)
     metrics: dict[str, float] = {}
@@ -248,14 +235,6 @@ def load_experiment_metrics(exp_dir: Path | str) -> dict[str, float]:
     wfo_path = root / "wfo_summary.csv"
     if wfo_path.exists():
         _add_median_summary(metrics, "wfo", pd.read_csv(wfo_path))
-
-    portfolio_path = root / "portfolio_summary.csv"
-    if portfolio_path.exists():
-        _add_direct_summary(metrics, "portfolio", pd.read_csv(portfolio_path))
-
-    ranking_summary_path = root / "ranking_attribution_summary.csv"
-    if ranking_summary_path.exists():
-        _add_median_summary(metrics, "ranking", pd.read_csv(ranking_summary_path))
 
     calibration_path = root / "meta_label_calibration.csv"
     if calibration_path.exists():

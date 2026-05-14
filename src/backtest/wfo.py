@@ -463,21 +463,57 @@ def _fit_meta_model_for_fold(
     *,
     min_samples: int = 10,
     l2_penalty: float = 0.1,
+    label_type: str = "profit_aware",
+    max_drawdown_threshold: float = 0.08,
 ) -> LogisticMetaModel | None:
     """Train a fold-local meta-label model, returning None when samples are weak."""
     signal_dates = _buy_signal_dates(train_df, params, bt_kwargs)
     if len(signal_dates) < min_samples:
         return None
+    # Compute DK trend state for signal-context features
+    dk_trend_state = _compute_dk_state(train_df, params, bt_kwargs)
     X, y, _ = build_training_samples(
         train_df,
         signal_dates,
         index_ohlcv=bt_kwargs.get("index_ohlcv"),
+        label_type=label_type,
+        max_drawdown_threshold=max_drawdown_threshold,
+        dk_trend_state=dk_trend_state,
     )
     if len(X) < min_samples or len(np.unique(y)) < 2:
         return None
     model = LogisticMetaModel(l2_penalty=l2_penalty)
     model.fit(X, y, feature_names=FEATURE_COLUMNS)
     return model
+
+
+def _compute_dk_state(
+    df: pd.DataFrame,
+    params: DKTrendParams,
+    bt_kwargs: dict[str, Any],
+) -> pd.DataFrame:
+    """Compute DK trend state with run_len for signal-context features."""
+    volume_confirm = bool(bt_kwargs.get("volume_confirm", False))
+    volume_lookback = int(bt_kwargs.get("volume_lookback", 20))
+    volume_ratio_min = float(bt_kwargs.get("volume_ratio_min", 1.0))
+    if params.mode == TrendMode.DONCHIAN_BREAKOUT:
+        trend = compute_donchian_trend(
+            df,
+            entry_window=params.donchian_entry_window,
+            exit_window=params.donchian_exit_window,
+            min_run_len=params.min_run_len,
+        ).reset_index(drop=True)
+        trend = apply_volume_confirmation(
+            trend, enabled=volume_confirm, lookback=volume_lookback,
+            volume_ratio_min=volume_ratio_min,
+        ).reset_index(drop=True)
+    else:
+        trend = compute_dktrend(df, params).reset_index(drop=True)
+        trend = apply_volume_confirmation(
+            trend, enabled=volume_confirm, lookback=volume_lookback,
+            volume_ratio_min=volume_ratio_min,
+        ).reset_index(drop=True)
+    return trend[["trade_date", "dk_color", "dk_run_len"]].copy()
 
 
 def run_walk_forward_optimization(

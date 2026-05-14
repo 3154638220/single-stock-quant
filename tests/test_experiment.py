@@ -54,10 +54,6 @@ class TestExperimentDir:
 
     def test_expected_artifacts_include_phase15_outputs(self):
         artifacts = expected_experiment_artifacts()
-        assert "portfolio_summary.csv" in artifacts
-        assert "ranking_attribution.csv" in artifacts
-        assert "ranking_attribution_summary.csv" in artifacts
-        assert "candidate_breakdown.csv" in artifacts
         assert "meta_label_calibration.csv" in artifacts
         assert "feature_importance.csv" in artifacts
         assert "stability_heatmap.html" in artifacts
@@ -116,51 +112,48 @@ class TestExperimentComparison:
             ]
         ).to_csv(exp / "batch_summary.csv", index=False)
         pd.DataFrame(
-            [{"annualized_return": 0.08, "sharpe_ratio": 0.75, "max_drawdown": 0.25}]
-        ).to_csv(exp / "portfolio_summary.csv", index=False)
-        pd.DataFrame(
-            [{"horizon": 20, "top_minus_bottom": 0.01, "bucket_return_corr": 0.5}]
-        ).to_csv(exp / "ranking_attribution_summary.csv", index=False)
+            [{"symbol": "000001", "status": "ok", "sharpe_ratio": 1.2, "max_drawdown": 0.15}]
+        ).to_csv(exp / "wfo_summary.csv", index=False)
 
         metrics = load_experiment_metrics(exp)
 
         assert metrics["batch_n_rows"] == 2
         assert metrics["batch_median_sharpe_ratio"] == 0.4
         assert metrics["batch_median_max_drawdown"] == 0.25
-        assert metrics["portfolio_sharpe_ratio"] == 0.75
-        assert metrics["ranking_median_top_minus_bottom"] == 0.01
+        assert metrics["wfo_n_rows"] == 1
+        assert metrics["wfo_median_sharpe_ratio"] == 1.2
 
     def test_compare_metric_summaries_marks_lower_drawdown_as_improved(self):
         rows = compare_metric_summaries(
-            {"portfolio_sharpe_ratio": 0.5, "portfolio_max_drawdown": 0.35},
-            {"portfolio_sharpe_ratio": 0.7, "portfolio_max_drawdown": 0.25},
+            {"batch_median_sharpe_ratio": 0.5, "batch_median_max_drawdown": 0.35},
+            {"batch_median_sharpe_ratio": 0.7, "batch_median_max_drawdown": 0.25},
         )
         by_metric = {row["metric"]: row for row in rows}
 
-        assert by_metric["portfolio_sharpe_ratio"]["direction"] == "improved"
-        assert by_metric["portfolio_max_drawdown"]["direction"] == "improved"
+        assert by_metric["batch_median_sharpe_ratio"]["direction"] == "improved"
+        assert by_metric["batch_median_max_drawdown"]["direction"] == "improved"
 
     def test_compare_metric_summaries_reports_ci_overlap(self):
         rows = compare_metric_summaries(
             {
-                "portfolio_sharpe_ratio": 0.5,
-                "portfolio_sharpe_ratio_ci_low": 0.3,
-                "portfolio_sharpe_ratio_ci_high": 0.6,
+                "batch_median_sharpe_ratio": 0.5,
+                "batch_median_sharpe_ratio_ci_low": 0.3,
+                "batch_median_sharpe_ratio_ci_high": 0.6,
             },
             {
-                "portfolio_sharpe_ratio": 0.8,
-                "portfolio_sharpe_ratio_ci_low": 0.7,
-                "portfolio_sharpe_ratio_ci_high": 1.0,
+                "batch_median_sharpe_ratio": 0.8,
+                "batch_median_sharpe_ratio_ci_low": 0.7,
+                "batch_median_sharpe_ratio_ci_high": 1.0,
             },
         )
 
-        assert rows[0]["metric"] == "portfolio_sharpe_ratio"
+        assert rows[0]["metric"] == "batch_median_sharpe_ratio"
         assert rows[0]["ci_overlap"] == "no"
 
     def test_render_html_and_write_delta(self):
         rows = compare_metric_summaries(
-            {"portfolio_sharpe_ratio": 0.5},
-            {"portfolio_sharpe_ratio": 0.8},
+            {"batch_median_sharpe_ratio": 0.5},
+            {"batch_median_sharpe_ratio": 0.8},
         )
         html = render_experiment_comparison_html(
             rows,
@@ -176,4 +169,4 @@ class TestExperimentComparison:
 
         assert "Experiment Comparison" in html
         assert delta.exists()
-        assert "portfolio_sharpe_ratio" in delta.read_text(encoding="utf-8")
+        assert "batch_median_sharpe_ratio" in delta.read_text(encoding="utf-8")

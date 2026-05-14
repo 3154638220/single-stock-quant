@@ -2,6 +2,12 @@
 
 Lightweight logistic-regression model trained on per-signal features.
 All evaluation is WFO-based — no random train/test split.
+
+Stage 23 improvements:
+- New ``label_type="profit_aware"``: requires both positive forward return AND
+  max drawdown during holding period < threshold
+- Signal-context features: DK trend state, run length, entry quality
+- Symbol-level recent performance meta-features
 """
 
 from __future__ import annotations
@@ -61,10 +67,15 @@ def build_signal_features(
     ohlcv: pd.DataFrame,
     *,
     index_ohlcv: pd.DataFrame | None = None,
+    dk_trend_state: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Build feature matrix for every row in *ohlcv*.
 
     Returns a DataFrame with feature columns indexed by position.
+
+    When *dk_trend_state* is provided (columns: trade_date, dk_color,
+    dk_run_len), signal-context features such as trend run length and
+    freshness are appended.
     """
     df = ohlcv.copy()
     close = pd.to_numeric(df["close"], errors="coerce")
@@ -156,6 +167,53 @@ def build_signal_features(
 
     out["vol_price_corr_20"] = volume.rolling(20, min_periods=10).corr(stock_daily_ret)
 
+    # ── Stage 23: signal-context features ──
+    # Entry quality: how far is close from MA20 in ATR terms
+    out["entry_distance_ma20_atr"] = (close - ma20) / atr.replace(0.0, np.nan)
+
+    # Overextension: close relative to 20-day high-low range
+    high20 = high.rolling(20, min_periods=20).max()
+    low20 = low.rolling(20, min_periods=20).min()
+    out["close_in_20d_range"] = (close - low20) / (high20 - low20).replace(0.0, np.nan)
+
+    # Trend alignment: MA20 slope direction * MA60 slope direction
+    ma20_dir = (ma20.diff() > 0).astype(float) * 2 - 1
+    ma60_dir = (ma60.diff() > 0).astype(float) * 2 - 1
+    out["trend_alignment"] = ma20_dir * ma60_dir  # +1 both up, -1 both down, 0 mixed
+
+    # Consecutive up days
+    close_dir = (close.diff() > 0).astype(float)
+    out["consecutive_up_5"] = close_dir.rolling(5, min_periods=5).sum() / 5.0
+
+    # Gap from recent high (pullback depth)
+    high10 = high.rolling(10, min_periods=10).max()
+    out["pullback_from_high10"] = (close - high10) / high10.replace(0.0, np.nan) * 100
+
+    # Volume trend: is volume expanding vs 20 days ago
+    out["volume_trend"] = (volume.rolling(5, min_periods=5).mean() /
+                           volume.rolling(20, min_periods=20).mean()).fillna(1.0)
+
+    # DK trend context (if provided)
+    if dk_trend_state is not None:
+        dk = dk_trend_state.copy()
+        dk["trade_date"] = pd.to_datetime(dk["trade_date"]).dt.normalize()
+        stock_dates = pd.to_datetime(df["trade_date"]).dt.normalize()
+        dk_map = dict(zip(dk["trade_date"], dk["dk_run_len"]))
+        out["dk_run_len"] = pd.Series(
+            [dk_map.get(d, -1) for d in stock_dates],
+            index=df.index,
+            dtype=np.float64,
+        )
+        dk_color_map = dict(zip(dk["trade_date"], dk["dk_color"]))
+        out["dk_is_red"] = pd.Series(
+            [1.0 if str(dk_color_map.get(d, "")).lower() == "red" else 0.0 for d in stock_dates],
+            index=df.index,
+            dtype=np.float64,
+        )
+    else:
+        out["dk_run_len"] = -1.0
+        out["dk_is_red"] = 0.0
+
     return out
 
 
@@ -178,6 +236,14 @@ FEATURE_COLUMNS = [
     "beta_120",
     "close_accel_10",
     "vol_price_corr_20",
+    "entry_distance_ma20_atr",
+    "close_in_20d_range",
+    "trend_alignment",
+    "consecutive_up_5",
+    "pullback_from_high10",
+    "volume_trend",
+    "dk_run_len",
+    "dk_is_red",
 ]
 
 
@@ -187,7 +253,9 @@ def build_training_samples(
     *,
     index_ohlcv: pd.DataFrame | None = None,
     forward_return_days: int = 20,
-    label_type: str = "profit",
+    label_type: str = "profit_aware",
+    max_drawdown_threshold: float = 0.08,
+    dk_trend_state: pd.DataFrame | None = None,
 ) -> tuple[np.ndarray, np.ndarray, pd.DatetimeIndex]:
     """Build (X, y, dates) from BUY signal dates.
 
@@ -196,9 +264,16 @@ def build_training_samples(
     label_type:
         - ``"profit"``: forward *forward_return_days* close return > 0
         - ``"risk_reward"``: max forward 20d return > |min forward 10d return|
+        - ``"profit_aware"``: forward return > 0 AND max drawdown during
+          holding period < *max_drawdown_threshold*
+    max_drawdown_threshold:
+        Only used for ``label_type="profit_aware"``. A signal is labeled 1
+        only if the open-to-open path never drops more than this fraction
+        below the entry price AND ends with a positive forward return.
     """
-    features_df = build_signal_features(ohlcv, index_ohlcv=index_ohlcv)
+    features_df = build_signal_features(ohlcv, index_ohlcv=index_ohlcv, dk_trend_state=dk_trend_state)
     close = pd.to_numeric(ohlcv["close"], errors="coerce")
+    open_price = pd.to_numeric(ohlcv.get("open", close), errors="coerce")
 
     # Build date → index mapping
     trade_dates = pd.to_datetime(ohlcv["trade_date"]).dt.normalize()
@@ -231,15 +306,26 @@ def build_training_samples(
             max_gain = fwd_rets.max()
             max_loss = fwd_rets.iloc[: min(10, len(fwd_rets))].min()
             label = 1.0 if max_gain > abs(max_loss) else 0.0
+        elif label_type == "profit_aware":
+            # Use open-to-open path for realistic execution
+            entry_price = open_price.iloc[pos]
+            fwd_path = open_price.iloc[pos + 1 : pos + forward_return_days + 1]
+            if len(fwd_path) == 0 or entry_price <= 0:
+                continue
+            fwd_rets = fwd_path.to_numpy(dtype=np.float64) / entry_price - 1.0
+            max_dd = float(np.min(fwd_rets))  # worst point during holding
+            fwd_ret = float(close.iloc[pos + forward_return_days] / close.iloc[pos] - 1.0)
+            # Must: (a) end positive, (b) never drawdown beyond threshold
+            label = 1.0 if (fwd_ret > 0 and max_dd > -max_drawdown_threshold) else 0.0
         else:
             raise ValueError(f"unknown label_type: {label_type}")
 
-        X_rows.append([feat_row[c] for c in FEATURE_COLUMNS])
+        X_rows.append([feat_row.get(c, 0.0) for c in FEATURE_COLUMNS])
         y_rows.append(label)
         valid_dates.append(sig_date)
 
     X = np.array(X_rows, dtype=np.float64)
-    X = np.nan_to_num(X, nan=0.0)
+    X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
     y = np.array(y_rows, dtype=np.float64)
     return X, y, pd.DatetimeIndex(valid_dates)
 
@@ -317,8 +403,10 @@ def run_meta_label_wfo(
     train_days: int = 504,
     oos_days: int = 126,
     l2_penalty: float = 0.1,
-    label_type: str = "profit",
+    label_type: str = "profit_aware",
+    max_drawdown_threshold: float = 0.08,
     min_signals_per_fold: int = 5,
+    dk_trend_state: pd.DataFrame | None = None,
 ) -> list[MetaLabelResult]:
     """Walk-forward evaluation of meta-label model.
 
@@ -362,11 +450,13 @@ def run_meta_label_wfo(
 
         X_train, y_train, _ = build_training_samples(
             train_df, train_dates, index_ohlcv=index_ohlcv,
-            label_type=label_type,
+            label_type=label_type, max_drawdown_threshold=max_drawdown_threshold,
+            dk_trend_state=dk_trend_state,
         )
         X_test, y_test, _ = build_training_samples(
             test_df, test_dates, index_ohlcv=index_ohlcv,
-            label_type=label_type,
+            label_type=label_type, max_drawdown_threshold=max_drawdown_threshold,
+            dk_trend_state=dk_trend_state,
         )
 
         if len(X_train) < min_signals_per_fold or len(X_test) < min_signals_per_fold:

@@ -109,20 +109,6 @@ risk:
   extreme_drop_threshold: 0.05
   risk_off_factor: 0.0
 
-portfolio:
-  # balanced: stage-10 linear score; meta_priority: p_win-dominant score;
-  # dk_meta: require DK red trend state and rank mostly by p_win;
-  # dk_fresh_meta: require DK red trend age <= 20 trading days;
-  # dk_calibrated_meta: DK red pool plus rolling forward-return bucket calibration.
-  ranking_profile: balanced
-  max_per_industry: 0.40
-  # E20 structural guardrails. Use only after candidate_breakdown confirms
-  # stable negative expectancy; keep empty for the baseline experiment.
-  industry_map: ""          # CSV path with symbol/code and industry/industry_name
-  exclude_symbols: []       # e.g. ["000002", "600048"]
-  greylist_symbols: []      # e.g. ["600585"]
-  greylist_score_scale: 0.50
-
 notify:
   wecom_webhook_url: ""
   mention_all: false
