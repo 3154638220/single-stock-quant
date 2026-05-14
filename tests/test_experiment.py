@@ -6,11 +6,16 @@ from pathlib import Path
 import pandas as pd
 
 from src.backtest.experiment import (
+    compare_metric_summaries,
     config_hash,
     create_experiment_dir,
     evaluate_experiment,
+    expected_experiment_artifacts,
     get_git_commit,
+    load_experiment_metrics,
+    render_experiment_comparison_html,
     update_experiment_index,
+    write_delta_markdown,
 )
 
 
@@ -44,6 +49,16 @@ class TestExperimentDir:
         d = create_experiment_dir("test_exp", base_dir=self.tmp, notes="test notes")
         assert d.exists()
         assert (d / "notes.md").exists()
+        assert (d / "ARTIFACTS.md").exists()
+        assert (d / "DELTA.md").exists()
+
+    def test_expected_artifacts_include_phase15_outputs(self):
+        artifacts = expected_experiment_artifacts()
+        assert "portfolio_summary.csv" in artifacts
+        assert "meta_label_calibration.csv" in artifacts
+        assert "feature_importance.csv" in artifacts
+        assert "stability_heatmap.html" in artifacts
+        assert "DELTA.md" in artifacts
 
     def test_update_index_creates_csv(self):
         d = create_experiment_dir("idx_test", base_dir=self.tmp)
@@ -79,3 +94,79 @@ class TestEvaluateExperiment:
             baseline={"median_sharpe": 0.3, "median_max_drawdown": 0.35, "median_n_trades": 50},
         )
         assert result["verdict"] == "insufficient_samples"
+
+
+class TestExperimentComparison:
+    def setup_method(self):
+        self.tmp = Path(tempfile.mkdtemp())
+
+    def teardown_method(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_load_metrics_from_standard_experiment_files(self):
+        exp = create_experiment_dir("metrics", base_dir=self.tmp)
+        pd.DataFrame(
+            [
+                {"symbol": "000001", "status": "ok", "sharpe_ratio": 0.2, "max_drawdown": 0.30},
+                {"symbol": "000002", "status": "ok", "sharpe_ratio": 0.6, "max_drawdown": 0.20},
+                {"symbol": "000003", "status": "no_data", "sharpe_ratio": 9.0, "max_drawdown": 0.90},
+            ]
+        ).to_csv(exp / "batch_summary.csv", index=False)
+        pd.DataFrame(
+            [{"annualized_return": 0.08, "sharpe_ratio": 0.75, "max_drawdown": 0.25}]
+        ).to_csv(exp / "portfolio_summary.csv", index=False)
+
+        metrics = load_experiment_metrics(exp)
+
+        assert metrics["batch_n_rows"] == 2
+        assert metrics["batch_median_sharpe_ratio"] == 0.4
+        assert metrics["batch_median_max_drawdown"] == 0.25
+        assert metrics["portfolio_sharpe_ratio"] == 0.75
+
+    def test_compare_metric_summaries_marks_lower_drawdown_as_improved(self):
+        rows = compare_metric_summaries(
+            {"portfolio_sharpe_ratio": 0.5, "portfolio_max_drawdown": 0.35},
+            {"portfolio_sharpe_ratio": 0.7, "portfolio_max_drawdown": 0.25},
+        )
+        by_metric = {row["metric"]: row for row in rows}
+
+        assert by_metric["portfolio_sharpe_ratio"]["direction"] == "improved"
+        assert by_metric["portfolio_max_drawdown"]["direction"] == "improved"
+
+    def test_compare_metric_summaries_reports_ci_overlap(self):
+        rows = compare_metric_summaries(
+            {
+                "portfolio_sharpe_ratio": 0.5,
+                "portfolio_sharpe_ratio_ci_low": 0.3,
+                "portfolio_sharpe_ratio_ci_high": 0.6,
+            },
+            {
+                "portfolio_sharpe_ratio": 0.8,
+                "portfolio_sharpe_ratio_ci_low": 0.7,
+                "portfolio_sharpe_ratio_ci_high": 1.0,
+            },
+        )
+
+        assert rows[0]["metric"] == "portfolio_sharpe_ratio"
+        assert rows[0]["ci_overlap"] == "no"
+
+    def test_render_html_and_write_delta(self):
+        rows = compare_metric_summaries(
+            {"portfolio_sharpe_ratio": 0.5},
+            {"portfolio_sharpe_ratio": 0.8},
+        )
+        html = render_experiment_comparison_html(
+            rows,
+            baseline_dir=self.tmp / "base",
+            current_dir=self.tmp / "current",
+        )
+        delta = write_delta_markdown(
+            rows,
+            baseline_dir=self.tmp / "base",
+            current_dir=self.tmp / "current",
+            output_path=self.tmp / "DELTA.md",
+        )
+
+        assert "Experiment Comparison" in html
+        assert delta.exists()
+        assert "portfolio_sharpe_ratio" in delta.read_text(encoding="utf-8")

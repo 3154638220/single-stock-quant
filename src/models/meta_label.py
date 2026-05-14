@@ -42,6 +42,21 @@ def _sigmoid(x: np.ndarray) -> np.ndarray:
     return out
 
 
+def _rolling_last_rank(s: pd.Series, window: int, min_periods: int) -> pd.Series:
+    """Percentile rank of the current value within its trailing window."""
+    return s.rolling(window, min_periods=min_periods).apply(
+        lambda x: (x.iloc[-1] >= x).mean(),
+        raw=False,
+    )
+
+
+def _rolling_beta(stock_ret: pd.Series, index_ret: pd.Series, window: int = 120) -> pd.Series:
+    """Rolling beta of stock returns versus benchmark returns."""
+    cov = stock_ret.rolling(window, min_periods=max(30, window // 2)).cov(index_ret)
+    var = index_ret.rolling(window, min_periods=max(30, window // 2)).var()
+    return cov / var.replace(0.0, np.nan)
+
+
 def build_signal_features(
     ohlcv: pd.DataFrame,
     *,
@@ -90,6 +105,8 @@ def build_signal_features(
     # Relative strength vs index
     stock_ret_60 = close.pct_change(60)
     out["stock_ret_60"] = stock_ret_60
+    stock_daily_ret = close.pct_change(fill_method=None)
+    index_daily_ret = pd.Series(0.0, index=df.index, dtype=np.float64)
     if index_ohlcv is not None and not index_ohlcv.empty:
         idx_close = pd.to_numeric(index_ohlcv["close"], errors="coerce")
         idx_dates = pd.to_datetime(index_ohlcv["trade_date"]).dt.normalize()
@@ -100,8 +117,44 @@ def build_signal_features(
             index=df.index,
             dtype=np.float64,
         )
+        idx_daily_ret_map = dict(zip(idx_dates, idx_close.pct_change(fill_method=None)))
+        index_daily_ret = pd.Series(
+            [idx_daily_ret_map.get(d, 0.0) for d in stock_dates],
+            index=df.index,
+            dtype=np.float64,
+        )
     else:
         out["rs_60"] = stock_ret_60
+
+    # Phase 11 feature set: longer-horizon price location, price/volume
+    # behaviour, trend consistency, acceleration, and benchmark sensitivity.
+    high_252 = high.rolling(252, min_periods=120).max()
+    low_252 = low.rolling(252, min_periods=120).min()
+    out["pos_52w"] = (close - low_252) / (high_252 - low_252).replace(0.0, np.nan)
+
+    price_up_5 = close.pct_change(5, fill_method=None) > 0
+    vol_down_5 = volume < volume.shift(1)
+    out["pv_diverge"] = (price_up_5 & vol_down_5.rolling(5, min_periods=5).sum().ge(4)).astype(float)
+
+    ma5 = close.rolling(5, min_periods=5).mean()
+    out["trend_consistency_20"] = (close > ma5).astype(float).rolling(20, min_periods=10).mean()
+
+    ema12 = close.ewm(span=12, adjust=False, min_periods=12).mean()
+    ema26 = close.ewm(span=26, adjust=False, min_periods=26).mean()
+    macd_line = ema12 - ema26
+    macd_signal = macd_line.ewm(span=9, adjust=False, min_periods=9).mean()
+    macd_hist = macd_line - macd_signal
+    out["macd_hist_dir"] = (macd_hist.diff() > 0).rolling(3, min_periods=3).sum().eq(3).astype(float)
+
+    turnover_proxy = pd.to_numeric(df.get("turnover_rate", volume * close), errors="coerce")
+    out["turnover_rank_60"] = _rolling_last_rank(turnover_proxy, 60, 30)
+
+    out["beta_120"] = _rolling_beta(stock_daily_ret, index_daily_ret, window=120)
+
+    ma10 = close.rolling(10, min_periods=10).mean()
+    out["close_accel_10"] = ma10.diff().diff()
+
+    out["vol_price_corr_20"] = volume.rolling(20, min_periods=10).corr(stock_daily_ret)
 
     return out
 
@@ -117,6 +170,14 @@ FEATURE_COLUMNS = [
     "donchian_20_breakout",
     "stock_ret_60",
     "rs_60",
+    "pos_52w",
+    "pv_diverge",
+    "trend_consistency_20",
+    "macd_hist_dir",
+    "turnover_rank_60",
+    "beta_120",
+    "close_accel_10",
+    "vol_price_corr_20",
 ]
 
 

@@ -48,6 +48,13 @@ def build_bt_kwargs(cfg: dict[str, Any], *, index_ohlcv: pd.DataFrame | None = N
         "min_quality_score": float(filt_cfg.get("min_quality_score", 0.0)),
         "quality_score_mode": str(filt_cfg.get("quality_score_mode", "hard")),
         "quality_score_floor": float(filt_cfg.get("quality_score_floor", 0.3)),
+        "meta_label_threshold": float(filt_cfg.get("meta_label_threshold", 0.50)),
+        "meta_label_mode": str(filt_cfg.get("meta_label_mode", "off")),
+        "require_above_ma120": bool(filt_cfg.get("require_above_ma120", False)),
+        "require_positive_rs60": bool(filt_cfg.get("require_positive_rs60", False)),
+        "require_weekly_bullish": bool(filt_cfg.get("require_weekly_bullish", False)),
+        "weekly_ma_fast": int(filt_cfg.get("weekly_ma_fast", 5)),
+        "weekly_ma_slow": int(filt_cfg.get("weekly_ma_slow", 13)),
         # Phase 4.1 — exit optimisation
         "time_stop_days": int(bt_cfg.get("time_stop_days", 0)),
         "time_stop_min_return": float(bt_cfg.get("time_stop_min_return", 0.0)),
@@ -57,6 +64,8 @@ def build_bt_kwargs(cfg: dict[str, Any], *, index_ohlcv: pd.DataFrame | None = N
         # Phase 4.2 — volatility-target position sizing
         "volatility_target_ann": float(bt_cfg.get("volatility_target_ann", 0.0)),
         "volatility_lookback": int(bt_cfg.get("volatility_lookback", 20)),
+        "volatility_high_vol_multiple": float(bt_cfg.get("volatility_high_vol_multiple", 1.5)),
+        "volatility_high_vol_scale": float(bt_cfg.get("volatility_high_vol_scale", 0.5)),
         # Phase 4.3 — drawdown throttle
         "drawdown_throttle_enabled": bool(bt_cfg.get("drawdown_throttle_enabled", False)),
     }

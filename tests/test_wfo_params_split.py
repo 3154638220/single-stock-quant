@@ -1,8 +1,12 @@
+import pandas as pd
+
 from src.backtest.wfo import (
     DEFAULT_PARAM_GRID,
     _BT_PARAM_KEYS,
     _params_with,
+    _select_stable_params,
     normalize_param_grid,
+    run_walk_forward_optimization,
 )
 from src.indicators import DKTrendParams, TrendMode
 
@@ -51,3 +55,56 @@ class TestDefaultParamGrid:
         grid = normalize_param_grid({"macd_fast": 12, "macd_slow": [26]})
         assert grid["macd_fast"] == [12]
         assert grid["macd_slow"] == [26]
+
+
+class TestStableParamSelection:
+    def test_requires_minimum_fold_count(self):
+        result = _select_stable_params(
+            [{"params": {"macd_fast": 8}, "is_score": 1.0}],
+            min_folds=5,
+        )
+        assert result["used"] is False
+        assert result["params"] == {}
+
+    def test_prefers_stable_region_over_single_high_peak(self):
+        fold_results = [
+            {"params": {"macd_fast": 8, "min_run_len": 1}, "is_score": 1.00},
+            {"params": {"macd_fast": 8, "min_run_len": 1}, "is_score": 1.05},
+            {"params": {"macd_fast": 8, "min_run_len": 2}, "is_score": 0.95},
+            {"params": {"macd_fast": 8, "min_run_len": 2}, "is_score": 1.02},
+            {"params": {"macd_fast": 14, "min_run_len": 3}, "is_score": 1.80},
+            {"params": {"macd_fast": 14, "min_run_len": 3}, "is_score": -0.20},
+        ]
+        result = _select_stable_params(fold_results, min_folds=5, top_n=2)
+        assert result["used"] is True
+        assert result["params"]["macd_fast"] == 8
+
+
+class TestWFOMetaLabel:
+    def test_wfo_runs_with_meta_label_enabled(self):
+        closes = ([10.0, 10.0, 10.5, 11.0, 12.0, 11.0, 10.0, 9.0, 8.5, 9.5] * 14)
+        n = len(closes)
+        df = pd.DataFrame(
+            {
+                "trade_date": pd.date_range("2024-01-01", periods=n),
+                "open": closes,
+                "high": [c * 1.01 for c in closes],
+                "low": [c * 0.99 for c in closes],
+                "close": closes,
+                "volume": [100.0] * n,
+            }
+        )
+        result = run_walk_forward_optimization(
+            "600000",
+            df,
+            base_params=DKTrendParams(mode=TrendMode.BOLL_TREND, boll_window=3),
+            param_grid={"boll_window": [3], "min_run_len": [1]},
+            train_days=80,
+            oos_days=20,
+            mode=TrendMode.BOLL_TREND,
+            enable_meta_label=True,
+            meta_label_min_samples=1,
+        )
+
+        assert result["enable_meta_label"] is True
+        assert result["n_folds"] >= 1

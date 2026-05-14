@@ -12,7 +12,11 @@ import pandas as pd
 
 from src.backtest.performance_panel import aggregate_panels, compute_performance_panel
 from src.backtest.single_stock import run_single_stock_backtest
-from src.indicators import DKTrendParams, TrendMode
+from src.indicators import DKTrendParams, TrendMode, compute_dktrend
+from src.indicators.donchian import compute_donchian_trend
+from src.models.meta_label import FEATURE_COLUMNS, LogisticMetaModel, build_training_samples
+from src.signals.consensus import compute_consensus_trend
+from src.signals.generator import apply_volume_confirmation
 
 DEFAULT_PARAM_GRID: dict[str, list] = {
     "macd_fast": [8, 10, 12, 14],
@@ -33,6 +37,10 @@ _BT_PARAM_KEYS = {
     "market_exit_mode",
     "volatility_target_ann", "volatility_lookback",
     "drawdown_throttle_enabled",
+    "meta_label_threshold", "meta_label_mode",
+    "require_above_ma120", "require_positive_rs60",
+    "require_weekly_bullish", "weekly_ma_fast", "weekly_ma_slow",
+    "volatility_high_vol_multiple", "volatility_high_vol_scale",
 }
 
 # All kwargs that run_single_stock_backtest accepts (beyond cost_bps, cost_params, initial_capital).
@@ -50,6 +58,10 @@ _VALID_BT_KWARGS = {
     "market_exit_mode",
     "volatility_target_ann", "volatility_lookback",
     "drawdown_throttle_enabled",
+    "meta_model", "meta_label_threshold", "meta_label_mode",
+    "require_above_ma120", "require_positive_rs60",
+    "require_weekly_bullish", "weekly_ma_fast", "weekly_ma_slow",
+    "volatility_high_vol_multiple", "volatility_high_vol_scale",
 }
 
 
@@ -138,8 +150,9 @@ def _stability(best_by_fold: list[dict[str, Any]]) -> dict[str, Any]:
     is_scores = np.array([x["is_score"] for x in best_by_fold], dtype=np.float64)
     oos_sharpes = np.array([x["oos_sharpe"] for x in best_by_fold], dtype=np.float64)
     valid = np.isfinite(is_scores) & np.isfinite(oos_sharpes)
+    corr_ready = int(valid.sum()) >= 2 and float(np.std(is_scores[valid])) > 0 and float(np.std(oos_sharpes[valid])) > 0
     out["is_oos_score_corr"] = (
-        float(np.corrcoef(is_scores[valid], oos_sharpes[valid])[0, 1]) if int(valid.sum()) >= 2 else float("nan")
+        float(np.corrcoef(is_scores[valid], oos_sharpes[valid])[0, 1]) if corr_ready else float("nan")
     )
     return out
 
@@ -276,6 +289,83 @@ def _parameter_drift(best_by_fold: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _select_stable_params(
+    fold_results: list[dict[str, Any]],
+    *,
+    min_folds: int = 5,
+    top_n: int = 5,
+) -> dict[str, Any]:
+    """Select parameters by cross-fold IS stability instead of peak score."""
+    valid_rows: list[tuple[dict[str, Any], float]] = []
+    for row in fold_results:
+        params = row.get("params")
+        if not isinstance(params, dict):
+            continue
+        raw_score = row.get("is_score", row.get("platform_score", float("nan")))
+        try:
+            score = float(raw_score)
+        except (TypeError, ValueError):
+            continue
+        if np.isfinite(score):
+            valid_rows.append((dict(params), score))
+
+    if len(valid_rows) < min_folds:
+        return {
+            "params": {},
+            "n_folds": len(valid_rows),
+            "used": False,
+            "reason": f"need at least {min_folds} folds",
+        }
+
+    grouped: dict[tuple[tuple[str, Any], ...], dict[str, Any]] = {}
+    for params, score in valid_rows:
+        key = tuple(sorted(params.items()))
+        entry = grouped.setdefault(key, {"params": params, "scores": []})
+        entry["scores"].append(score)
+
+    ranked: list[dict[str, Any]] = []
+    for entry in grouped.values():
+        scores = np.array(entry["scores"], dtype=np.float64)
+        mean = float(np.mean(scores))
+        std = float(np.std(scores))
+        ranked.append(
+            {
+                "params": dict(entry["params"]),
+                "n": int(len(scores)),
+                "is_score_mean": mean,
+                "is_score_std": std,
+                "stability_score": float(mean / (std + 0.1)),
+            }
+        )
+
+    ranked.sort(key=lambda x: (x["stability_score"], x["is_score_mean"], x["n"]), reverse=True)
+    top = ranked[: max(1, int(top_n))]
+    keys = sorted({k for row in top for k in row["params"]})
+    centre: dict[str, Any] = {}
+    for key in keys:
+        vals = [row["params"][key] for row in top if key in row["params"]]
+        if not vals:
+            continue
+        if all(isinstance(v, bool) for v in vals):
+            centre[key] = max(set(vals), key=vals.count)
+            continue
+        try:
+            numeric_vals = np.array(vals, dtype=np.float64)
+            value = float(np.median(numeric_vals))
+            if all(isinstance(v, int) and not isinstance(v, bool) for v in vals):
+                value = int(round(value))
+            centre[key] = value
+        except (TypeError, ValueError):
+            centre[key] = max(set(vals), key=vals.count)
+
+    return {
+        "params": centre,
+        "n_folds": len(valid_rows),
+        "used": True,
+        "top_region": top,
+    }
+
+
 def _build_heatmap_data(
     combos: list[dict[str, Any]],
     scores: list[float],
@@ -325,6 +415,71 @@ def _build_heatmap_data(
     return heatmaps
 
 
+def _buy_signal_dates(df: pd.DataFrame, params: DKTrendParams, bt_kwargs: dict[str, Any]) -> pd.DatetimeIndex:
+    """Compute BUY signal dates for one train window using the selected signal stack."""
+    volume_confirm = bool(bt_kwargs.get("volume_confirm", False))
+    volume_lookback = int(bt_kwargs.get("volume_lookback", 20))
+    volume_ratio_min = float(bt_kwargs.get("volume_ratio_min", 1.0))
+    consensus_n = bt_kwargs.get("consensus_n_agree")
+    if consensus_n is not None and int(consensus_n) > 1:
+        trend = compute_consensus_trend(
+            df,
+            base_params=params,
+            n_agree=int(consensus_n),
+            volume_confirm=volume_confirm,
+            volume_lookback=volume_lookback,
+            volume_ratio_min=volume_ratio_min,
+        ).reset_index(drop=True)
+    elif params.mode == TrendMode.DONCHIAN_BREAKOUT:
+        trend = compute_donchian_trend(
+            df,
+            entry_window=params.donchian_entry_window,
+            exit_window=params.donchian_exit_window,
+            min_run_len=params.min_run_len,
+        ).reset_index(drop=True)
+        trend = apply_volume_confirmation(
+            trend,
+            enabled=volume_confirm,
+            lookback=volume_lookback,
+            volume_ratio_min=volume_ratio_min,
+        ).reset_index(drop=True)
+    else:
+        trend = compute_dktrend(df, params).reset_index(drop=True)
+        trend = apply_volume_confirmation(
+            trend,
+            enabled=volume_confirm,
+            lookback=volume_lookback,
+            volume_ratio_min=volume_ratio_min,
+        ).reset_index(drop=True)
+    dates = pd.to_datetime(df["trade_date"]).dt.normalize().reset_index(drop=True)
+    mask = trend["dk_signal"].astype(str).eq("buy")
+    return pd.DatetimeIndex(dates[mask])
+
+
+def _fit_meta_model_for_fold(
+    train_df: pd.DataFrame,
+    params: DKTrendParams,
+    bt_kwargs: dict[str, Any],
+    *,
+    min_samples: int = 10,
+    l2_penalty: float = 0.1,
+) -> LogisticMetaModel | None:
+    """Train a fold-local meta-label model, returning None when samples are weak."""
+    signal_dates = _buy_signal_dates(train_df, params, bt_kwargs)
+    if len(signal_dates) < min_samples:
+        return None
+    X, y, _ = build_training_samples(
+        train_df,
+        signal_dates,
+        index_ohlcv=bt_kwargs.get("index_ohlcv"),
+    )
+    if len(X) < min_samples or len(np.unique(y)) < 2:
+        return None
+    model = LogisticMetaModel(l2_penalty=l2_penalty)
+    model.fit(X, y, feature_names=FEATURE_COLUMNS)
+    return model
+
+
 def run_walk_forward_optimization(
     symbol: str,
     ohlcv: pd.DataFrame,
@@ -338,6 +493,11 @@ def run_walk_forward_optimization(
     cost_bps: float = 15.0,
     initial_capital: float = 100_000.0,
     bt_kwargs: dict[str, Any] | None = None,
+    enable_meta_label: bool = False,
+    meta_label_threshold: float = 0.50,
+    meta_label_mode: str = "hard",
+    meta_label_min_samples: int = 10,
+    stability_weighting: bool = False,
 ) -> dict[str, Any]:
     """Run rolling or expanding WFO and return a JSON-serializable report."""
     code = str(symbol).strip().zfill(6)
@@ -406,6 +566,21 @@ def run_walk_forward_optimization(
         _, platform_bt = _params_with(base, best_platform, mode_value)
         bt_final.update(platform_bt)
 
+        meta_model = (
+            _fit_meta_model_for_fold(
+                train_df,
+                selected,
+                bt_final,
+                min_samples=int(meta_label_min_samples),
+            )
+            if enable_meta_label
+            else None
+        )
+        if enable_meta_label:
+            bt_final["meta_model"] = meta_model
+            bt_final["meta_label_threshold"] = float(meta_label_threshold)
+            bt_final["meta_label_mode"] = str(meta_label_mode)
+
         oos_res = run_single_stock_backtest(
             code,
             oos_df,
@@ -442,6 +617,7 @@ def run_walk_forward_optimization(
             "params": dict(best_platform),
             "platform_score": platform_score,
             "oos_sharpe": panel.sharpe_ratio,
+            "meta_label_trained": meta_model is not None,
             "platform_info": platform_info,
         })
         all_is_scores.extend(is_scores)
@@ -460,6 +636,12 @@ def run_walk_forward_optimization(
 
     heatmaps = _build_heatmap_data(combos, all_is_scores, all_oos_sharpes if all_oos_sharpes else None)
 
+    stable_parameter_selection = (
+        _select_stable_params(platform_by_fold, min_folds=5)
+        if stability_weighting
+        else {"params": {}, "n_folds": len(platform_by_fold), "used": False, "reason": "disabled"}
+    )
+
     return {
         "symbol": code,
         "mode": mode_value,
@@ -468,10 +650,15 @@ def run_walk_forward_optimization(
         "train_days": int(train_days),
         "oos_days": int(oos_days),
         "window": str(window),
+        "enable_meta_label": bool(enable_meta_label),
+        "meta_label_mode": str(meta_label_mode) if enable_meta_label else "off",
+        "meta_label_threshold": float(meta_label_threshold),
+        "stability_weighting": bool(stability_weighting),
         "oos_panels": oos_panel_dicts,
         "aggregated": aggregated,
         "best_params_by_fold": best_by_fold,
         "platform_by_fold": platform_by_fold,
+        "stable_parameter_selection": stable_parameter_selection,
         "parameter_stability": _stability(best_by_fold),
         "parameter_drift": _parameter_drift([x for x in platform_by_fold]),
         "heatmaps": heatmaps,
@@ -493,6 +680,11 @@ def run_nested_walk_forward_optimization(
     cost_bps: float = 15.0,
     initial_capital: float = 100_000.0,
     bt_kwargs: dict[str, Any] | None = None,
+    enable_meta_label: bool = False,
+    meta_label_threshold: float = 0.50,
+    meta_label_mode: str = "hard",
+    meta_label_min_samples: int = 10,
+    stability_weighting: bool = True,
 ) -> dict[str, Any]:
     """Nested walk-forward optimisation.
 
@@ -550,13 +742,26 @@ def run_nested_walk_forward_optimization(
             cost_bps=cost_bps,
             initial_capital=initial_capital,
             bt_kwargs=base_bt,
+            enable_meta_label=enable_meta_label,
+            meta_label_threshold=meta_label_threshold,
+            meta_label_mode=meta_label_mode,
+            meta_label_min_samples=meta_label_min_samples,
+            stability_weighting=stability_weighting,
         )
 
-        # Use the platform-selected params from the last inner fold, or the mode across folds
+        # Prefer a cross-fold stable parameter centre; fall back to voting when
+        # the inner WFO has too few folds for a stability estimate.
         platform_by_fold = inner_result.get("platform_by_fold", [])
         best_by_fold = inner_result.get("best_params_by_fold", [])
+        stable_selection = (
+            _select_stable_params(platform_by_fold, min_folds=5)
+            if stability_weighting
+            else {"params": {}, "n_folds": len(platform_by_fold), "used": False, "reason": "disabled"}
+        )
 
-        if platform_by_fold:
+        if stable_selection.get("used"):
+            selected_params = stable_selection["params"]
+        elif platform_by_fold:
             # Use the most frequent platform-selected params across inner folds
             param_votes: dict[str, list[dict[str, Any]]] = {}
             for pf in platform_by_fold:
@@ -565,13 +770,29 @@ def run_nested_walk_forward_optimization(
             best_key = max(param_votes, key=lambda k: len(param_votes[k]))
             selected_params = param_votes[best_key][0]
         elif best_by_fold:
-            selected_params = best_by_fold[-1]["params"]
+            stable_selection = _select_stable_params(best_by_fold, min_folds=5)
+            selected_params = stable_selection["params"] if stable_selection.get("used") else best_by_fold[-1]["params"]
         else:
+            stable_selection = {"params": {}, "n_folds": 0, "used": False, "reason": "no inner folds"}
             selected_params = combos[0]
 
         # --- Evaluate selected params on outer OOS ---
         params, sel_bt = _params_with(base, selected_params, mode_value)
         bt_final = {**base_bt, **sel_bt}
+        meta_model = (
+            _fit_meta_model_for_fold(
+                outer_train_df,
+                params,
+                bt_final,
+                min_samples=int(meta_label_min_samples),
+            )
+            if enable_meta_label
+            else None
+        )
+        if enable_meta_label:
+            bt_final["meta_model"] = meta_model
+            bt_final["meta_label_threshold"] = float(meta_label_threshold)
+            bt_final["meta_label_mode"] = str(meta_label_mode)
         oos_res = run_single_stock_backtest(
             code,
             outer_oos_df,
@@ -594,6 +815,7 @@ def run_nested_walk_forward_optimization(
             "outer_oos_start": pd.Timestamp(outer_oos_df["trade_date"].iloc[0]).date().isoformat(),
             "outer_oos_end": pd.Timestamp(outer_oos_df["trade_date"].iloc[-1]).date().isoformat(),
             "selected_params": dict(selected_params),
+            "meta_label_trained": meta_model is not None,
             "oos_total_return": oos_res.total_return,
             "oos_annualized_return": oos_res.annualized_return,
             "oos_sharpe": oos_res.sharpe_ratio,
@@ -607,6 +829,7 @@ def run_nested_walk_forward_optimization(
             "inner_n_folds": inner_result["n_folds"],
             "inner_aggregated": inner_result["aggregated"],
             "inner_stability": inner_result.get("parameter_stability", {}),
+            "stable_selection": stable_selection,
             "selected_params": dict(selected_params),
         })
 
@@ -633,9 +856,14 @@ def run_nested_walk_forward_optimization(
         "inner_train_days": int(inner_train_days),
         "inner_oos_days": int(inner_oos_days),
         "window": str(window),
+        "enable_meta_label": bool(enable_meta_label),
+        "meta_label_mode": str(meta_label_mode) if enable_meta_label else "off",
+        "meta_label_threshold": float(meta_label_threshold),
+        "stability_weighting": bool(stability_weighting),
         "outer_folds": outer_fold_results,
         "aggregated": aggregated,
         "inner_wfo_summaries": inner_wfo_summaries,
+        "stable_params_by_outer_fold": [s.get("stable_selection", {}) for s in inner_wfo_summaries],
         "parameter_stability": _stability([{"params": p, "is_score": float("nan"), "oos_sharpe": float("nan")} for p in all_selected_params]),
         "parameter_drift": _parameter_drift([{"params": p} for p in all_selected_params]),
     }

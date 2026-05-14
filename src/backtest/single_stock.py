@@ -10,9 +10,11 @@ import pandas as pd
 from src.backtest.performance_panel import annualized_return_cagr, compute_performance_panel
 from src.backtest.risk_metrics import risk_off_multiplier_from_index
 from src.backtest.transaction_costs import TransactionCostParams, cost_params_dict_for_logging
+from src.features.weekly_trend import compute_weekly_trend_state
 from src.indicators import DKTrendParams, TrendMode, compute_dktrend
 from src.indicators.donchian import compute_donchian_trend
 from src.market.tradability import is_open_limit_down_unsellable, is_open_limit_up_unbuyable, is_row_suspended_like
+from src.models.meta_label import FEATURE_COLUMNS, build_signal_features
 from src.signals.consensus import compute_consensus_trend
 from src.signals.generator import apply_volume_confirmation, compute_signal_quality
 
@@ -86,6 +88,14 @@ def _compute_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     atr = tr.rolling(period, min_periods=period).mean()
     atr.name = "atr"
     return atr
+
+
+def _ewma_volatility(returns: pd.Series, span: int = 20) -> pd.Series:
+    """Annualised EWMA volatility, using only historical returns."""
+    span = max(int(span), 2)
+    vol = pd.to_numeric(returns, errors="coerce").ewm(span=span, min_periods=max(5, span // 2)).std() * np.sqrt(252)
+    vol.name = "ewma_volatility"
+    return vol
 
 
 def _is_tradable_open(df: pd.DataFrame, idx: int) -> bool:
@@ -195,6 +205,27 @@ def _beta_to_benchmark(strategy_returns: pd.Series, benchmark_returns: pd.Series
     return float(cov / var)
 
 
+def _extract_signal_features_at(features: pd.DataFrame, idx: int) -> np.ndarray:
+    """Return one model-ready feature row for a signal position."""
+    if idx < 0 or idx >= len(features):
+        raise IndexError(f"signal idx out of range: {idx}")
+    row = features.iloc[idx]
+    values = np.array([row.get(c, np.nan) for c in FEATURE_COLUMNS], dtype=np.float64)
+    return np.nan_to_num(values, nan=0.0, posinf=0.0, neginf=0.0)
+
+
+def _predict_meta_p_win(meta_model: object, features: pd.DataFrame, idx: int) -> float:
+    """Predict p_win from either this project's model or a sklearn-like model."""
+    x = _extract_signal_features_at(features, idx).reshape(1, -1)
+    raw = meta_model.predict_proba(x)  # type: ignore[attr-defined]
+    arr = np.asarray(raw, dtype=np.float64)
+    if arr.ndim == 2:
+        p = arr[0, 1] if arr.shape[1] > 1 else arr[0, 0]
+    else:
+        p = arr.reshape(-1)[0]
+    return float(p) if np.isfinite(p) else float("nan")
+
+
 def run_single_stock_backtest(
     symbol: str,
     ohlcv: pd.DataFrame,
@@ -227,6 +258,14 @@ def run_single_stock_backtest(
     min_quality_score: float = 0.0,
     quality_score_mode: str = "hard",
     quality_score_floor: float = 0.3,
+    meta_model: object | None = None,
+    meta_label_threshold: float = 0.50,
+    meta_label_mode: str = "off",
+    require_above_ma120: bool = False,
+    require_positive_rs60: bool = False,
+    require_weekly_bullish: bool = False,
+    weekly_ma_fast: int = 5,
+    weekly_ma_slow: int = 13,
     # Phase 4.1 — exit optimisation
     time_stop_days: int = 0,
     time_stop_min_return: float = 0.0,
@@ -236,6 +275,8 @@ def run_single_stock_backtest(
     # Phase 4.2 — volatility-target position sizing
     volatility_target_ann: float = 0.0,
     volatility_lookback: int = 20,
+    volatility_high_vol_multiple: float = 1.5,
+    volatility_high_vol_scale: float = 0.5,
     # Phase 4.3 — drawdown throttle
     drawdown_throttle_enabled: bool = False,
 ) -> SingleStockBacktestResult:
@@ -298,6 +339,12 @@ def run_single_stock_backtest(
     _attr_avg_vol = _attr_vol.rolling(window=volume_lookback, min_periods=volume_lookback).mean()
     _attr_vol_ratio = _attr_vol / _attr_avg_vol
     _attr_stock_ret60 = _attr_close.pct_change(60)
+    _attr_ma120 = _attr_close.rolling(120, min_periods=120).mean()
+    _attr_weekly_trend = (
+        compute_weekly_trend_state(df, ma_windows=(int(weekly_ma_fast), int(weekly_ma_slow))).reset_index(drop=True)
+        if bool(require_weekly_bullish)
+        else pd.Series("neutral", index=df.index, dtype=object)
+    )
     _attr_regime = pd.Series("unknown", index=df.index, dtype=object)
     _attr_rs_60 = pd.Series(np.nan, index=df.index, dtype=np.float64)
     _attr_idx_ret60 = pd.Series(np.nan, index=df.index, dtype=np.float64)
@@ -317,6 +364,14 @@ def run_single_stock_backtest(
         _attr_rs_60 = _attr_stock_ret60 - _attr_idx_ret60
     else:
         _attr_rs_60 = _attr_stock_ret60
+
+    meta_mode = str(meta_label_mode).lower()
+    meta_threshold = float(meta_label_threshold)
+    _meta_features = (
+        build_signal_features(df, index_ohlcv=index_ohlcv).reset_index(drop=True)
+        if meta_model is not None and meta_mode != "off"
+        else None
+    )
 
     actions: dict[int, str] = {}
     entry_meta: dict[int, dict] = {}
@@ -340,6 +395,24 @@ def run_single_stock_backtest(
             _q = float(_attr_quality.iloc[i]) if i < len(_attr_quality) else 0.0
             if min_quality_score > 0 and str(quality_score_mode).lower() in {"hard", "scale"} and _q < min_quality_score:
                 continue
+            if bool(require_above_ma120):
+                _ma120 = float(_attr_ma120.iloc[i]) if i < len(_attr_ma120) else float("nan")
+                _close_i = float(_attr_close.iloc[i]) if i < len(_attr_close) else float("nan")
+                if not (np.isfinite(_ma120) and np.isfinite(_close_i) and _close_i > _ma120):
+                    continue
+            if bool(require_positive_rs60):
+                _rs60 = float(_attr_rs_60.iloc[i]) if i < len(_attr_rs_60) else float("nan")
+                if not (np.isfinite(_rs60) and _rs60 > 0):
+                    continue
+            if bool(require_weekly_bullish):
+                _weekly_state = str(_attr_weekly_trend.iloc[i]) if i < len(_attr_weekly_trend) else "neutral"
+                if _weekly_state != "bullish":
+                    continue
+            _meta_p_win = float("nan")
+            if meta_model is not None and _meta_features is not None and meta_mode in {"hard", "scale"}:
+                _meta_p_win = _predict_meta_p_win(meta_model, _meta_features, i)
+                if meta_mode == "hard" and (not np.isfinite(_meta_p_win) or _meta_p_win < meta_threshold):
+                    continue
             j = _next_buy_index(df, code, i + 1)
             if j is None:
                 continue
@@ -351,6 +424,7 @@ def run_single_stock_backtest(
                 "atr_pct": float(_attr_atr_pct.iloc[i]) if i < len(_attr_atr_pct) and np.isfinite(_attr_atr_pct.iloc[i]) else float("nan"),
                 "regime": str(_attr_regime.iloc[i]) if i < len(_attr_regime) else "unknown",
                 "rs_60": float(_attr_rs_60.iloc[i]) if i < len(_attr_rs_60) and np.isfinite(_attr_rs_60.iloc[i]) else float("nan"),
+                "meta_p_win": _meta_p_win,
             }
         elif sig == "sell" and planned_long and i + 1 < len(df):
             j = _next_sell_index(df, i + 1, code)
@@ -395,6 +469,11 @@ def run_single_stock_backtest(
     market_exit = str(market_exit_mode).lower() in {"exit", "reduce"}
     vol_target_enabled = max(float(volatility_target_ann), 0.0) > 0
     vol_lookback = max(int(volatility_lookback), 5)
+    close_returns = pd.to_numeric(df["close"], errors="coerce").pct_change()
+    ewma_vol = _ewma_volatility(close_returns, span=vol_lookback) if vol_target_enabled else pd.Series(dtype=float)
+    ewma_vol_median = ewma_vol.expanding(min_periods=max(10, vol_lookback)).median() if vol_target_enabled else pd.Series(dtype=float)
+    high_vol_multiple = max(float(volatility_high_vol_multiple), 0.0)
+    high_vol_scale = max(min(float(volatility_high_vol_scale), 1.0), 0.0)
     dd_throttle = bool(drawdown_throttle_enabled)
     peak_equity = float(initial_capital)
     # Precompute index MA60 for market-exit signals
@@ -429,6 +508,7 @@ def run_single_stock_backtest(
             price = float(df.loc[i, "open"])
             if price > 0 and np.isfinite(price):
                 total_equity = cash  # cash is all equity when flat
+                position_value = total_equity * pos_cap * (1.0 - buy_frac)
                 if use_risk_sizing:
                     stop_dist_pct = stop_loss
                     if atr_stop_mult > 0 and not atr_series.empty:
@@ -440,22 +520,23 @@ def run_single_stock_backtest(
                                 stop_dist_pct = max(stop_dist_pct, atr_dist_pct) if stop_loss > 0 else atr_dist_pct
                     if stop_dist_pct > 0:
                         max_risk_amount = total_equity * risk_per_trade
-                        position_value = max_risk_amount / stop_dist_pct
-                        position_value = min(position_value, total_equity * pos_cap)
-                        position_value = position_value * (1.0 - buy_frac)
-                    else:
-                        position_value = total_equity * (1.0 - buy_frac)
-                else:
-                    position_value = total_equity * (1.0 - buy_frac)
-                # Phase 4.2 — volatility-target scaling
-                if vol_target_enabled and i >= vol_lookback:
-                    _closes = pd.to_numeric(df["close"].iloc[max(0, i - vol_lookback) : i + 1], errors="coerce")
-                    _rets = _closes.pct_change().dropna()
-                    if len(_rets) >= 5:
-                        _real_vol = float(_rets.std(ddof=1)) * np.sqrt(252)
-                        if np.isfinite(_real_vol) and _real_vol > 0:
-                            _vol_scale = min(1.0, float(volatility_target_ann) / _real_vol)
-                            position_value *= _vol_scale
+                        risk_capped_value = max_risk_amount / stop_dist_pct
+                        position_value = min(position_value, risk_capped_value * (1.0 - buy_frac))
+                # Phase 14 — EWMA volatility-target scaling and high-volatility haircut
+                if vol_target_enabled and i < len(ewma_vol):
+                    _real_vol = float(ewma_vol.iloc[i])
+                    if np.isfinite(_real_vol) and _real_vol > 0:
+                        _vol_scale = min(1.0, float(volatility_target_ann) / _real_vol)
+                        _median_vol = float(ewma_vol_median.iloc[i]) if i < len(ewma_vol_median) else float("nan")
+                        if (
+                            high_vol_multiple > 0
+                            and high_vol_scale < 1.0
+                            and np.isfinite(_median_vol)
+                            and _median_vol > 0
+                            and _real_vol > high_vol_multiple * _median_vol
+                        ):
+                            _vol_scale = min(_vol_scale, high_vol_scale)
+                        position_value *= _vol_scale
                 # Phase 4.3 — drawdown throttle
                 if dd_throttle:
                     _dd = (peak_equity - total_equity) / peak_equity if peak_equity > 0 else 0.0
@@ -474,6 +555,12 @@ def run_single_stock_backtest(
                     if np.isfinite(_q_for_scale) and _q_for_scale > 0:
                         _q_mult = max(float(quality_score_floor), _q_for_scale / 100.0)
                         position_value *= _q_mult
+                # Phase 8 — meta-label position scaling
+                if meta_model is not None and meta_mode == "scale" and i in entry_meta:
+                    _p_win_for_scale = float(entry_meta[i].get("meta_p_win", float("nan")))
+                    if np.isfinite(_p_win_for_scale):
+                        _meta_mult = min(1.0, max(0.3, (_p_win_for_scale - 0.40) / 0.40))
+                        position_value *= _meta_mult
                 shares = position_value / price
                 entry_cash = total_equity
                 cash = total_equity - position_value
@@ -488,6 +575,7 @@ def run_single_stock_backtest(
                 entry_atr_pct_val = float(_meta.get("atr_pct", float("nan")))
                 entry_regime = str(_meta.get("regime", "unknown"))
                 entry_rs_60_val = float(_meta.get("rs_60", float("nan")))
+                entry_meta_p_win = float(_meta.get("meta_p_win", float("nan")))
                 mae = 0.0
                 mfe = 0.0
                 if atr_stop_mult > 0 and not atr_series.empty:
@@ -520,6 +608,7 @@ def run_single_stock_backtest(
                     "entry_atr_pct": entry_atr_pct_val,
                     "entry_market_regime": entry_regime,
                     "entry_rs_60": entry_rs_60_val,
+                    "entry_meta_p_win": entry_meta_p_win,
                     "mae": mae,
                     "mfe": mfe,
                 }
@@ -614,6 +703,7 @@ def run_single_stock_backtest(
                 "entry_atr_pct": entry_atr_pct_val,
                 "entry_market_regime": entry_regime,
                 "entry_rs_60": entry_rs_60_val,
+                "entry_meta_p_win": entry_meta_p_win,
                 "mae": mae,
                 "mfe": mfe,
             }

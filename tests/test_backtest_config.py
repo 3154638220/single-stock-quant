@@ -26,6 +26,11 @@ def test_build_bt_kwargs_minimal_config():
     assert kw["stop_reentry_enabled"] is False
     assert kw["stop_reentry_cooldown"] == 3
     assert kw["stop_reentry_min_run"] == 2
+    assert kw["require_weekly_bullish"] is False
+    assert kw["weekly_ma_fast"] == 5
+    assert kw["weekly_ma_slow"] == 13
+    assert kw["volatility_high_vol_multiple"] == 1.5
+    assert kw["volatility_high_vol_scale"] == 0.5
 
 
 def test_build_bt_kwargs_with_transaction_cost():

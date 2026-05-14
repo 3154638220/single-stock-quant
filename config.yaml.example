@@ -48,6 +48,14 @@ signal_filter:
   volume_ratio_min: 1.0
   min_quality_score: 0
   quality_score_mode: hard
+  quality_score_floor: 0.3
+  meta_label_mode: off
+  meta_label_threshold: 0.50
+  require_above_ma120: false
+  require_positive_rs60: false
+  require_weekly_bullish: false
+  weekly_ma_fast: 5
+  weekly_ma_slow: 13
 
 backtest:
   cost_bps: 15.0
@@ -69,6 +77,8 @@ backtest:
   market_exit_mode: off
   volatility_target_ann: 0.0
   volatility_lookback: 20
+  volatility_high_vol_multiple: 1.5
+  volatility_high_vol_scale: 0.5
   drawdown_throttle_enabled: false
   transaction_cost:
     commission_buy_bps: 2.5

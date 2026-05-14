@@ -1,913 +1,833 @@
-# 模型方法与收益提升计划
+# 改进与模型效果优化计划
 
 **项目**：`single-stock-quant`
 **日期**：2026-05-13
-**最后更新**：2026-05-13 20:15 GMT+8
-**范围**：单股趋势择时、批量 watchlist 评估、WFO 参数寻优、信号质量和仓位管理。
-
-本计划的目标不是追求某一次回测的最高收益，而是把收益提升建立在可复现、可解释、可外推的 OOS 指标上。所有改动必须先通过无未来函数的评估链路，再进入策略参数或模型增强。
+**基于代码版本**：`single-stock-quant-main`（Phase 0–7 全部完成）
+**撰写目的**：在现有框架之上识别真实瓶颈，提出可落地、可测量的下阶段改进路径。
 
 ---
 
-## 进度总览
+## 0. 执行进度更新（2026-05-14）
 
-| 阶段 | 内容 | 状态 |
-|------|------|------|
-| 0 | 建立可靠实验基准 | ✅ 完成 |
-| 1.1 | 一字跌停无法卖出 | ✅ 完成 |
-| 1.2 | 交易归因表 (MAE/MFE/质量分/RS/市场状态) | ✅ 完成 |
-| 1.3 | 成本和滑点压力测试 | ✅ 完成 |
-| 2.1 | 质量评分接入回测 (hard + scale) | ✅ 完成 |
-| 2.2 | 趋势强度特征 + 增强质量评分 | ✅ 完成 |
-| 2.3 | 多信号候选池 (Donchian 突破) | ✅ 完成 (MACD/MA/Boll/Donchian) |
-| 3 | Meta-labeling 轻量模型 | ✅ 完成 |
-| 4.1 | 退出逻辑升级 (时间止损/盈利保护/市场退出) | ✅ 完成 |
-| 4.2 | 波动率目标仓位 | ✅ 完成 |
-| 4.3 | 回撤节流 | ✅ 完成 |
-| 5.1 | WFO 复合目标函数 | ✅ 完成 |
-| 5.2 | 参数平台选择 | ✅ 完成 |
-| 5.3 | 嵌套 WFO | ✅ 完成 |
-| 6 | watchlist 横截面组合 | ✅ 完成 |
-| 7 | 报告和研究闭环 | ✅ 完成 |
+| 阶段 | 状态 | 已落地内容 | 验证 |
+|---|---|---|---|
+| 阶段 8：Meta-labeling 接入 | 已完成 | `single_stock.py` 支持 `meta_model`、`meta_label_mode`、`meta_label_threshold`；WFO fold 内训练并注入 OOS；CLI/config 已接线 | 全量测试通过 |
+| 阶段 9：MA120/RS60 趋势过滤 | 已完成 | 单股回测支持 `require_above_ma120`、`require_positive_rs60`；配置和 CLI 已接线 | 全量测试通过 |
+| 阶段 10：Portfolio 层运行 | 已完成（代码层 + E10 首跑） | `run_portfolio_backtest.py` 支持 watchlist、benchmark、summary/weights/scores/html 导出；`rank_signals()` 接入 meta-label `p_win`、MA120、RS60 过滤；组合回测透传 meta 分数和过滤参数；新增扩展窗口 `p_win` 面板构造 | `pytest -q` 通过，当前 161 个测试 |
+| 阶段 11：Meta-label 特征工程 v2 | 已完成（首版） | `build_signal_features()` 新增 52 周位置、价量背离、趋势一致性、MACD 柱体方向、换手率分位、Beta、价格加速度、量价相关 8 个特征；新增特征边界和稳定性测试 | `pytest -q` 通过，当前 161 个测试 |
+| 阶段 12：WFO 稳定性架构升级 | 已完成（首版） | 新增 `_select_stable_params()`，按跨 fold `mean/(std+0.1)` 选择稳定参数区域；nested WFO 内层参数选择优先使用稳定区域，fold 不足 5 个时自动回退；`run_wfo.py --stability-weighting` 已接线 | `pytest -q` 通过，当前 161 个测试 |
+| 阶段 13：多周期信号确认 | 已完成（首版） | 新增 `src/features/weekly_trend.py`，日线聚合周线并输出 bullish/bearish/neutral；`single_stock.py` 支持 `require_weekly_bullish`、`weekly_ma_fast`、`weekly_ma_slow`；config/CLI/WFO 已接线 | `pytest -q` 通过，当前 168 个测试 |
+| 阶段 14：动态仓位精细化 | 已完成（首版） | 新增 EWMA 年化波动率估计；波动率目标仓位改用 EWMA 并支持高波动折扣；`position_size_cap` 在无止损风险 sizing 时也生效；ATR 止损距离继续约束风险仓位 | `pytest -q` 通过，当前 168 个测试 |
+| 阶段 15：实验闭环与报告完善 | 已完成（首版） | `create_experiment_dir()` 生成阶段 15 产物清单和 `DELTA.md` 占位；新增 `load_experiment_metrics()`、`compare_metric_summaries()`、HTML/Markdown 对比报告渲染；新增 `scripts/compare_experiments.py` 支持实验目录对比、CSV 导出和写回 `DELTA.md` | `pytest tests/test_experiment.py -q` 通过，当前该文件 14 个测试 |
 
-**质量分桶分析结论** (2026-05-13)：
-增强质量评分后，threshold=20 时 Sharpe 中位数 0.22（baseline 0.16），Sharpe>0 从 16/25 提升到 19/25。threshold=40 以上交易数不足。质量分对过滤低质量信号有效，但信号整体质量仍偏低，组合层（Phase 6）是提升整体收益的更高杠杆。
+阶段 10 首次真实数据实验已完成：`python scripts/run_portfolio_backtest.py --watchlist configs/watchlist_25.txt --start 2020-01-01 --end 2026-05-08 --n-top 5 --enable-meta-label --require-above-ma120 --export-summary data/output/portfolio_final.csv --export-weights data/output/portfolio_final_weights.csv --export-scores data/output/portfolio_final_scores.csv --export-html`。
+
+输出文件：
+- `data/output/portfolio_final.csv`
+- `data/output/portfolio_final_weights.csv`
+- `data/output/portfolio_final_scores.csv`
+- `data/output/portfolio_backtest_20260514.html`
+
+E10 首跑结果：年化收益 -1.79%，Sharpe 0.06，Calmar -0.03，最大回撤 64.34%，平均持仓 4.4。结果未达到组合 Sharpe ≥ 0.75、最大回撤 ≤ 28% 的验收目标；阶段 11/12/13/14/15 的代码层首版已完成，下一步应重跑 E11/E12/E13/E14/E_FINAL 实验，并用 `scripts/compare_experiments.py` 生成 DELTA 对比报告，验证新特征、稳定选参、周线过滤和 EWMA 仓位约束是否改善 WFO OOS 指标，同时复盘组合 ranking 是否过度持有弱势标的。
 
 ---
 
-## 1. 当前状态结论
+## 1. 现状总结与诊断
 
-### 1.1 已有能力
+### 1.1 已完成能力盘点
 
-当前代码已经具备较完整的规则型单股择时框架：
+Phase 0–7 完成后，项目具备以下完整能力：
 
-| 模块 | 已实现能力 |
+| 层次 | 已实现 |
 |---|---|
-| 数据 | DuckDB 日线存储、AkShare 拉取、质量检查、股票名称缓存 |
-| 指标 | `macd_cross`、`ma_cross`、`boll_trend`、`donchian_breakout` 四类 DK 趋势 |
-| 信号 | 量能确认、三模式共振、`min_run_len` 防抖、信号质量评分 (0-100) |
-| 特征 | 均线斜率、Donchian 突破、ATR 波动率分位、量比、相对强度 (vs 指数) |
-| 回测 | T+1 次日开盘执行、涨停买入顺延/跌停卖出顺延、停牌近似、真实 A 股成本模型 (佣金+滑点+印花税) |
-| 风控 | 固定/追踪/ATR 止损、盈利保护、时间止损、市场退出、波动率目标仓位、回撤节流、止损后再入场 |
-| 模型 | L2 逻辑回归 Meta-labeling，预测 BUY 信号胜率，WFO 评估 |
-| 评估 | 批量回测、WFO (含复合目标函数)、嵌套 WFO、参数平台选择、参数漂移量化、热力图、DSR、Bootstrap Sharpe CI、置换检验、HTML 报告 |
-| 组合 | 跨标的信号排序打分、Top N 等权/波动率倒数分配、仓位约束 (单票/行业/换手)、成本敏感性批量分析 |
-| 实验 | 标准化实验目录、index.csv 追踪、决策规则评估 |
+| 数据 | DuckDB 日线 + AkShare 拉取 + 质量检查 |
+| 指标 | MACD/MA/Boll/Donchian 四类 DK 趋势 |
+| 信号 | 量能确认、三模式共振、防抖、质量评分 (0–100) |
+| 特征 | 均线斜率、Donchian 突破、ATR 分位、量比、相对强度 |
+| 回测 | T+1 涨跌停处理、真实 A 股成本模型、停牌近似 |
+| 风控 | 固定/追踪/ATR 止损、盈利保护、时间止损、市场退出、波动率目标仓位、回撤节流 |
+| 模型 | L2 逻辑回归 Meta-labeling（`src/models/meta_label.py`） |
+| 评估 | WFO + 嵌套 WFO、复合目标函数、参数平台选择、DSR、Bootstrap Sharpe CI、置换检验、HTML 报告 |
+| 组合 | `signal_ranker.py`、`allocator.py`、`portfolio/backtest.py` |
 
-因此下一阶段不应重复实现基础功能，而要重点解决“信号有效性不足、参数不稳定、风控未充分联动、组合选择缺失、评估链路有漏洞”这五类问题。
+### 1.2 当前回测结果（Phase 0–7 完成后）
 
-### 1.2 真实回测结果诊断
+区间：2020-01-02 ~ 2026-05-08，25 只 watchlist
 
-基于 `data/output/batch_summary_20260513.csv`，25 只 watchlist 在 2020-01-02 至 2026-05-08 的结果如下：
-
-| 指标 | 当前结果 |
-|---|---:|
-| 有效标的数 | 25 |
-| 年化收益为正 | 13 / 25 |
-| Sharpe 为正 | 15 / 25 |
-| Calmar > 0.5 | 2 / 25 |
-| 年化收益中位数 | 0.60% |
-| 年化收益均值 | 1.52% |
-| Sharpe 中位数 | 0.11 |
-| Calmar 中位数 | 0.019 |
-| 最大回撤中位数 | 50.33% |
-| 单股交易次数中位数 | 50 |
-| 胜率中位数 | 35.09% |
-
-Top 标的集中在强趋势成长和部分金融股：
-
-| 标的 | 年化 | Sharpe | Calmar | 最大回撤 |
-|---|---:|---:|---:|---:|
-| 300750 宁德时代 | 25.28% | 0.84 | 0.58 | 43.23% |
-| 002475 立讯精密 | 20.15% | 0.75 | 0.52 | 38.39% |
-| 300059 东方财富 | 16.24% | 0.60 | 0.32 | 51.41% |
-| 600036 招商银行 | 10.62% | 0.64 | 0.46 | 23.21% |
-| 600030 中信证券 | 7.79% | 0.44 | 0.22 | 35.35% |
-
-Bottom 标的显示同一套信号在医药、消费、周期下行阶段承受较大回撤：
-
-| 标的 | 年化 | Sharpe | Calmar | 最大回撤 |
-|---|---:|---:|---:|---:|
-| 300760 迈瑞医疗 | -11.59% | -0.39 | -0.18 | 65.06% |
-| 600276 恒瑞医药 | -10.84% | -0.35 | -0.17 | 62.73% |
-| 600887 伊利股份 | -10.75% | -0.51 | -0.19 | 57.47% |
-| 600585 海螺水泥 | -8.49% | -0.33 | -0.14 | 62.58% |
-| 000651 格力电器 | -6.32% | -0.27 | -0.13 | 47.74% |
-
-核心判断：
-
-1. 单一 DK 趋势信号有一定方向性，但跨标的稳定性不足。
-2. 收益主要来自少数强趋势标的，watchlist 的中位收益很弱。
-3. 最大回撤过高，收益提升必须和回撤压缩同时推进。
-4. 当前每只股票独立交易，缺少”只交易更有优势标的”的横截面选择机制。
-5. WFO 结果显示参数选择不稳，不能简单扩大网格追求更高 IS Sharpe。
-
-### 1.2.1 更新后回测结果（Phase 1-7 完成后）
-
-**回测日期**：2026-05-13 20:15 GMT+8
-**配置摘要**：`config.yaml`，mode=macd_cross，stop_loss_pct=0.08，volume_confirm=true，真实A股成本模型
-**区间**：2020-01-02 至 2026-05-08
-**数据文件**：`data/output/batch_summary_20260513.csv`
-
-#### 汇总指标对比
-
-| 指标 | 旧 Baseline | **当前结果** | 变化 | 计划目标 |
-|---|---:|---:|---:|---:|
-| 有效标的数 | 25 | 25 | — | — |
-| 年化收益为正 | 13 / 25 | 13 / 25 | 持平 | — |
-| Sharpe 为正 | 15 / 25 | **17 / 25** | +2 | — |
-| Calmar > 0.5 | 2 / 25 | **3 / 25** | +1 | 8 / 25+ |
-| 年化收益中位数 | 0.60% | **2.43%** | +4.0x | 5%+ |
-| 年化收益均值 | 1.52% | **3.25%** | +2.1x | — |
-| Sharpe 中位数 | 0.11 | **0.26** | +2.4x | 0.35+ |
-| Calmar 中位数 | 0.019 | **0.040** | +2.1x | 0.25+ |
-| 最大回撤中位数 | 50.33% | **47.11%** | -3.2pct | <35% |
-| 交易次数中位数 | 50 | 50 | 持平 | — |
-| 胜率中位数 | 35.09% | **36.36%** | +1.3pct | — |
-
-#### 全部标的排名（按 Sharpe 降序）
-
-| 代码 | 名称 | 年化 | Sharpe | Calmar | 最大回撤 | 交易数 | 胜率 |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| 300750 | 宁德时代 | 27.27% | 0.88 | 0.66 | 41.45% | 47 | 48.94% |
-| 002475 | 立讯精密 | 22.02% | 0.80 | 0.59 | 37.63% | 46 | 45.65% |
-| 600036 | 招商银行 | 12.38% | 0.73 | 0.57 | 21.77% | 47 | 44.68% |
-| 300059 | 东方财富 | 18.05% | 0.64 | 0.36 | 49.98% | 46 | 43.48% |
-| 601166 | 兴业银行 | 9.21% | 0.58 | 0.44 | 20.93% | 50 | 44.00% |
-| 600030 | 中信证券 | 9.55% | 0.52 | 0.29 | 32.85% | 48 | 37.50% |
-| 601012 | 隆基绿能 | 9.62% | 0.46 | 0.19 | 51.26% | 51 | 37.25% |
-| 600809 | 山西汾酒 | 8.80% | 0.45 | 0.23 | 38.39% | 50 | 46.00% |
-| 601318 | 中国平安 | 5.78% | 0.39 | 0.16 | 36.79% | 46 | 43.48% |
-| 002594 | 比亚迪 | 3.11% | 0.36 | 0.04 | 78.47% | 46 | 30.43% |
-| 002415 | 海康威视 | 5.81% | 0.36 | 0.11 | 52.01% | 51 | 45.10% |
-| 000568 | 泸州老窖 | 4.08% | 0.28 | 0.09 | 47.11% | 52 | 38.46% |
-| 600900 | 长江电力 | 2.43% | 0.26 | 0.14 | 17.25% | 53 | 35.85% |
-| 601888 | 中国中免 | -0.87% | 0.13 | -0.01 | 63.30% | 50 | 34.00% |
-| 000002 | 万科A | -1.53% | 0.07 | -0.04 | 41.87% | 49 | 32.65% |
-| 000858 | 五粮液 | -1.48% | 0.05 | -0.04 | 39.55% | 50 | 40.00% |
-| 600519 | 贵州茅台 | -1.25% | 0.04 | -0.04 | 31.64% | 55 | 30.91% |
-| 600048 | 保利发展 | -4.07% | -0.04 | -0.08 | 49.71% | 51 | 29.41% |
-| 000725 | 京东方A | -3.78% | -0.10 | -0.07 | 50.76% | 57 | 26.32% |
-| 000333 | 美的集团 | -3.92% | -0.11 | -0.06 | 68.77% | 55 | 36.36% |
-| 000651 | 格力电器 | -4.79% | -0.18 | -0.11 | 45.09% | 48 | 33.33% |
-| 600585 | 海螺水泥 | -6.87% | -0.24 | -0.11 | 59.90% | 52 | 32.69% |
-| 600276 | 恒瑞医药 | -9.34% | -0.29 | -0.15 | 61.87% | 49 | 32.65% |
-| 300760 | 迈瑞医疗 | -9.87% | -0.31 | -0.16 | 62.29% | 57 | 35.09% |
-| 600887 | 伊利股份 | -9.14% | -0.42 | -0.17 | 54.58% | 53 | 28.30% |
-
-#### 成本敏感性分析
-
-数据文件：`data/output/batch_summary_20260513_cost_sensitivity.csv`
-
-| 成本模型 | 年化中位数 | Sharpe 中位数 | Calmar 中位数 |
+| 指标 | 当前值 | 目标值 | 差距 |
 |---|---:|---:|---:|
-| 零成本（上界） | 1.93% | 0.22 | 0.034 |
-| 对称 15bps | 1.93% | 0.22 | 0.034 |
-| **真实 A 股（默认）** | **2.43%** | **0.26** | **0.040** |
-| 高滑点（机构） | 1.49% | 0.18 | 0.029 |
+| 年化收益中位数 | 2.43% | 5%+ | -2.57pct |
+| Sharpe 中位数 | 0.26 | 0.35+ | -0.09 |
+| Calmar 中位数 | 0.040 | 0.25+ | **-0.21** |
+| 最大回撤中位数 | 47.11% | <35% | **+12.11pct** |
+| Calmar > 0.5 标的数 | 3 / 25 | 8 / 25+ | -5 只 |
 
-**Sharpe 衰减分析**（零成本 → 真实 A 股）：
-- 平均 Sharpe 衰减：**-0.020**（真实 A 股口径下 Sharpe 反而略高，因不同成本路径在止损触发边界有微小差异，属噪声级别）
-- 最大衰减：-0.010
-- 衰减 > 0.10 的标的：**0 / 25** ✅
-- 衰减 > 0.25 的标的：**0 / 25** ✅
+**核心矛盾**：Sharpe 已有一定改善（0.11 → 0.26），但 Calmar 依然极低（0.04），最大回撤高达 47%。这说明当前策略能捕捉趋势方向，但**无法控制持仓期间的大幅回撤**，导致风险收益比严重失衡。
 
-成本压力测试结论：策略换手率在可接受范围，成本模型切换不显著改变收益排序。**当前瓶颈不在交易成本，而在信号质量本身。**
+### 1.3 代码审查发现的关键空洞
 
-#### 与 Baseline 差异分析
+通过逐文件阅读代码，发现以下高优先级问题：
 
-主要改善来自以下已启用的 Phase 4 特性：
-1. **8% 固定止损** (`stop_loss_pct: 0.08`)：截断尾部亏损，对 Bottom 标的的 MDD 有改善
-2. **量能确认** (`volume_confirm: true`)：减少无量假突破的假 BUY
-3. **真实 A 股成本模型**：更精确的成本核算
+#### 空洞 A：Meta-labeling 模型已实现但从未接入交易
 
-尚未启用或未调优的特性（对当前结果无贡献）：
-- Phase 3 Meta-labeling：模型已实现但未接入回测过滤
-- Phase 5.2/5.3 WFO 平台选择/嵌套 WFO：需要实际运行来找到稳定参数
-- Phase 6 组合层：单股回测未使用横截面排序
+`src/models/meta_label.py` 完整实现了 `build_signal_features()`、`run_meta_label_wfo()` 和逻辑回归模型。**但在 `src/backtest/single_stock.py` 中，`run_single_stock_backtest()` 从不调用这个模型**，模型预测的 `p_win` 完全没有影响任何交易决策。
 
-#### 更新后核心判断
+```python
+# 现状：run_single_stock_backtest() 内没有任何如下代码
+# meta_model.predict_proba(features)
+# if p_win < threshold: skip_trade()
+```
 
-1. 相比旧 baseline，中位年化从 0.60% → 2.43%（+4x），Sharpe 从 0.11 → 0.26（+2.4x），止损和量能确认贡献了大部分改善。
-2. 但 **最大回撤中位数仍然高达 47.11%**，距离 35% 目标差距明显。8% 固定止损压不住趋势逆转时的大幅回撤。
-3. 收益仍然高度集中于少数强趋势股：Top 5 的 Sharpe 在 0.58-0.88，而后 12 只 Sharpe < 0.1。**组合层（Phase 6）是提高整体收益的最高杠杆。**
-4. 成本敏感性极低（Sharpe 衰减 < 0.02），换手率不是当前瓶颈。
-5. **后续优先事项**：(a) 运行嵌套 WFO 找稳定参数区域，(b) 将 meta-labeling 接入回测过滤低质量信号，(c) 启用组合层 top N 选股。
+这是已完成工作中最大的"最后一公里"缺口。模型已训练，特征已计算，只差最后的接入。
 
-### 1.3 WFO 结果诊断
+#### 空洞 B：Portfolio 层未产出任何 OOS 数字
 
-现有 `data/output/*_wfo_20260513.json` 里有 5 只股票的 WFO 结果：
+`src/portfolio/backtest.py` 的 `run_portfolio_backtest()` 已经写好，但：
+- 没有对应的 `scripts/run_portfolio_backtest.py`（目录下只有空的 `.gitkeep`）
+- 没有任何 portfolio-level 的 OOS 回测结果文件
+- `rank_signals()` 在 `signal_ranker.py` 里打的是"趋势强度分"，**没有使用 Meta-label 的 `p_win` 作为信号排名的核心权重**
 
-| 标的 | folds | OOS 年化 | OOS Sharpe | OOS MDD | DSR p-value | IS/OOS Sharpe 相关 |
-|---|---:|---:|---:|---:|---:|---:|
-| 002475 | 17 | 14.61% | 0.67 | 32.46% | 0.56 | -0.35 |
-| 300059 | 17 | 17.92% | 0.69 | 31.23% | 0.51 | -0.07 |
-| 300750 | 11 | 20.53% | 0.82 | 45.79% | 0.55 | 0.69 |
-| 600036 | 17 | 4.19% | 0.33 | 22.60% | 0.88 | -0.27 |
-| 601166 | 17 | 4.81% | 0.39 | 24.93% | 0.84 | -0.22 |
+#### 空洞 C：WFO 的 IS/OOS 相关性大多为负
 
-结论：
+5 只有 WFO 结果的标的中，4 只 IS/OOS Sharpe 相关系数为负（-0.35, -0.07, -0.27, -0.22）。原因在于：
+- 参数选择依赖 IS 单一最高 Sharpe，而不是"稳定区域中心"
+- 即使已实现复合目标函数，`_select_best_params()` 仍然是逐 fold 选最优，没有跨 fold 的稳定性加权
+- 嵌套 WFO 存在实现，但没有真正运行并记录结果
 
-1. WFO 对强趋势股有效，但多数标的的 DSR p-value 偏高，统计显著性不足。
-2. 除 300750 外，IS/OOS Sharpe 相关为负或接近 0，参数择优存在过拟合风险。
-3. 这些 WFO 文件生成时的 `param_grid` 只包含 MACD 参数，未覆盖当前代码已支持的 `min_run_len`、`stop_loss_pct` 等扩展参数，需要重跑新基准。
+#### 空洞 D：Bottom 股票的根本问题未被解决
 
----
+Bottom 5 标的（迈瑞医疗、恒瑞医药、伊利股份、海螺水泥、格力电器）在 2021–2024 年均处于行业或公司基本面下行趋势中，DK 趋势指标在这种"慢熊"结构中会反复翻红翻绿，产生大量假信号。
 
-## 2. 首要问题和改进方向
+当前的"市场退出"和"指数过滤"只关注大盘整体，**没有行业/个股的中长期趋势判断**。一只股票可以在沪深 300 上涨的环境中持续走弱——现有框架完全无法识别这种结构。
 
-### 2.1 必须优先修正的评估问题
+#### 空洞 E：质量评分特征维度不足
 
-| 问题 | 影响 | 修正方向 |
-|---|---|---|
-| `run_batch_backtest.py` 未完整透传 `transaction_cost`、指数过滤、真实成本模型 | 批量结果和单股结果口径不一致 | 抽出统一 `_bt_kwargs()`，批量/单股/WFO 共用 |
-| `run_wfo.py` 只透传部分回测参数 | WFO 优化的不是实际配置策略 | WFO 纳入成本、量能、共振、仓位、再入场、指数过滤 |
-| `run_permutation_test()` 打乱行后会被 `_prepare_ohlcv()` 按 `trade_date` 排序还原 | 置换检验无法形成有效零分布 | 改为打乱信号、收益映射或重新生成合成日期 |
-| `breakdown_by_regime()` 按数组长度对齐，未按日期对齐指数 | 市场状态分解可能错位 | 改为 `pd.Series` 日期索引对齐 |
-| 止损强制退出未来动作检测漏掉 `atr_stop` | ATR 止损可能覆盖逻辑不严谨 | `_future_exit_index()` 加入 `atr_stop` |
-| 卖出只处理停牌近似，未处理一字跌停无法卖出 | 回撤可能被低估 | 增加开盘跌停不可卖出规则 |
-| `trade_log` 未记录 `entry_quality_score` | 无法验证质量分是否能提升收益 | 买入时写入质量分、量能、ATR 分位、市场状态 |
-
-这些问题不直接创造 Alpha，但决定后续所有“收益提升”是否可信。第一阶段必须先完成。
-
-### 2.2 收益提升的主要杠杆
-
-| 杠杆 | 为什么有效 | 当前缺口 |
-|---|---|---|
-| 信号筛选 | 过滤低质量 DK 翻红，减少震荡市亏损 | 质量评分已有雏形，但未进入回测决策 |
-| 市场/行业状态 | A 股单股趋势高度依赖大盘和行业 | 只有极端下跌入场过滤，缺少连续风险预算 |
-| 参数稳健选择 | 选择稳定区域而非单个最高 IS Sharpe | WFO 只按训练 Sharpe 择优 |
-| 动态仓位 | 强信号加仓，弱信号或高波动减仓 | 风险仓位只看止损距离，不看信号胜率 |
-| 退出优化 | 降低大回撤和趋势回吐 | 现有止损未加入时间止损、盈利保护、风险离场 |
-| 横截面选股 | 当前收益集中于少数股票，应优先交易优势标的 | 缺少 watchlist 级别排序和资金分配 |
+当前 `compute_signal_quality()` 的评分维度（共 8 项）完全基于技术面短期指标，缺少：
+- 个股相对行业指数的强弱（60/120 日）
+- 个股在其历史分位的动量（52 周高低位）
+- 大盘趋势结构的质量（牛市 vs. 震荡市下质量分的校准）
 
 ---
 
-## 3. 目标指标
+## 2. 根本原因分析
 
-所有目标以 OOS 或滚动样本为准，不以全样本单次回测为准。
+```
+问题：Calmar 低、最大回撤高
+  ├── 直接原因 1：在结构性下跌股票上持续交易
+  │     └── 根本原因：缺少中长期趋势过滤（行业+个股 60/120 日方向）
+  ├── 直接原因 2：Meta-label 模型未使用，无法过滤低胜率信号
+  │     └── 根本原因：模型实现与回测引擎未完成接线
+  ├── 直接原因 3：Portfolio 层未运行，资金分散在劣势标的
+  │     └── 根本原因：缺少运行脚本和 OOS 验证
+  └── 直接原因 4：参数过拟合，IS/OOS 转移差
+        └── 根本原因：WFO 选最高点，未用跨 fold 稳定性评分
+```
 
-### 3.1 第一阶段验收目标
+---
 
-| 指标 | 当前基准 | 第一阶段目标 |
+## 3. 改进目标（下一阶段）
+
+所有目标仍以 OOS 或滚动样本为准。
+
+| 指标 | Phase 0–7 结果 | 下阶段目标 |
 |---|---:|---:|
-| 批量回测口径 | 单股/批量/WFO 不完全一致 | 三者共用同一回测参数构造 |
-| 置换检验 | 存在排序还原问题 | Null Sharpe 分布和 observed 明显非同一常数 |
-| WFO 参数网格 | 旧结果只含 MACD | 新结果包含 `min_run_len`、止损、量能或质量阈值 |
-| 测试数 | 当前测试通过即可 | 新增关键 bug 回归测试，不降低覆盖 |
-
-### 3.2 收益目标
-
-| 指标 | 当前基准 | 目标区间 |
-|---|---:|---:|
-| watchlist 年化收益中位数 | 0.60% | 5% 以上 |
-| watchlist Sharpe 中位数 | 0.11 | 0.35 以上 |
-| watchlist Calmar 中位数 | 0.019 | 0.25 以上 |
-| Calmar > 0.5 标的数 | 2 / 25 | 8 / 25 以上 |
-| 最大回撤中位数 | 50.33% | 35% 以下 |
-| WFO DSR p-value < 0.10 | 当前偏少 | 至少 30% 标的通过 |
-
-这些不是收益承诺，而是研究阶段的通过阈值。若某一类改动只提高全样本收益，却恶化 OOS、DSR 或最大回撤，应放弃。
+| 年化收益中位数 | 2.43% | ≥ 5% |
+| Sharpe 中位数 | 0.26 | ≥ 0.40 |
+| Calmar 中位数 | 0.040 | ≥ 0.20 |
+| 最大回撤中位数 | 47.11% | ≤ 38% |
+| Calmar > 0.5 标的数 | 3 / 25 | ≥ 8 / 25 |
+| **组合 OOS Sharpe** | （未运行） | ≥ 0.75 |
+| **组合最大回撤** | （未运行） | ≤ 28% |
+| WFO IS/OOS 相关 | -0.35 ~ +0.69 | 多数标的 > 0 |
 
 ---
 
 ## 4. 实施阶段
 
-## 阶段 0：建立可靠实验基准
+---
 
-### 0.1 统一回测参数入口
+### 阶段 8：Meta-labeling 完整接入（最高优先级）
 
-**目标**：单股、批量、WFO、置换检验都使用同一套参数构造，避免同一策略在不同入口结果不一致。
+**为什么是最高优先级**：模型已训练好，特征已计算好，只差最后的接入。这是所有改动里实现成本最低、收益最确定的一项。
 
-**改动文件**：
+#### 8.1 在回测中实时预测 p_win
 
-| 文件 | 改动 |
-|---|---|
-| `scripts/run_backtest_single.py` | 保留 `_bt_kwargs()`，作为参考实现 |
-| `scripts/run_batch_backtest.py` | 复用统一参数构造，支持 `transaction_cost`、指数过滤、风险仓位、再入场 |
-| `scripts/run_wfo.py` | 透传完整 `signal_filter`、`risk`、`backtest` 参数 |
-| `src/backtest/config.py` | 建议新增：集中生成 `BacktestRuntimeConfig` 或 `dict` |
+**改动文件**：`src/backtest/single_stock.py`
 
-**验收**：
+在 `run_single_stock_backtest()` 中新增 `meta_model` 参数：
 
-```bash
-pytest tests/test_transaction_costs.py tests/test_position_management.py tests/test_wfo_params_split.py
-python scripts/run_backtest_single.py --symbol 600036 --start 2020-01-01 --end 2026-05-08
-python scripts/run_batch_backtest.py --watchlist configs/watchlist_25.txt --start 2020-01-01 --end 2026-05-08 --export-summary data/output/batch_rebaseline.csv
+```python
+def run_single_stock_backtest(
+    ohlcv, params, *,
+    meta_model=None,           # 新增：训练好的 MiniBatchLogisticRegression 或 None
+    meta_label_threshold=0.50, # 新增：p_win 低于此值跳过交易
+    meta_label_mode="hard",    # 新增：hard / scale / off
+    ...
+)
 ```
 
-同一标的在单股和批量入口的核心指标应一致或仅有展示口径差异。
+在产生 BUY 信号时的执行逻辑中：
 
-### 0.2 修复统计验证链路
+```python
+if meta_model is not None and str(meta_label_mode) != "off":
+    feat = _extract_signal_features_at(df, idx, index_ohlcv=index_ohlcv)
+    p_win = meta_model.predict_proba(feat[np.newaxis, :])[0]
+    if meta_label_mode == "hard" and p_win < meta_label_threshold:
+        continue  # 跳过此次 BUY
+    elif meta_label_mode == "scale":
+        position_frac *= max(0.3, (p_win - 0.40) / 0.40)
+```
 
-**问题 1：置换检验无效**
+需要新增辅助函数 `_extract_signal_features_at(df, idx, index_ohlcv)` 从 `build_signal_features()` 提取单行特征向量，避免重复计算整个特征矩阵。
 
-当前 `run_permutation_test()` 对 `ohlcv.sample(frac=1)` 后调用 `run_single_stock_backtest()`，但后者会按 `trade_date` 排序，导致打乱被还原。
+#### 8.2 WFO 内部自动训练 Meta-label
 
-**修正方案**：
+**改动文件**：`src/backtest/wfo.py`
 
-1. 方案 A：固定真实信号日期，随机置换未来日收益，构造 null equity。
-2. 方案 B：打乱 `close/open/high/low/volume` 序列后重新生成连续合成日期。
-3. 方案 C：只打乱 DK 信号触发日期，保留真实收益路径和执行规则。
+在 `_run_wfo_fold()` 的 train 阶段，除了参数搜索，还要：
 
-优先选方案 C，因为它保留 A 股收益分布、跳空、涨跌停结构，更适合检验“信号时点是否有信息含量”。
+1. 用 `build_training_samples()` 在 train 窗口内构建样本
+2. 用 `run_meta_label_wfo()` 或直接实例化 `MiniBatchLogisticRegression` 训练
+3. 将训练好的模型传给 OOS 评估的 `run_single_stock_backtest()`
 
-**问题 2：市场状态日期对齐**
+这样 meta-label 就自然嵌入到 WFO 评估链路中，不存在未来函数泄露。
 
-`breakdown_by_regime()` 应接收带日期索引的 `strategy_returns` 和 `index_returns`，按日期 inner join 后再计算 60 日指数状态。
-
-**验收**：
+#### 8.3 验收标准
 
 | 测试 | 期望 |
 |---|---|
-| 打乱后 null Sharpe 不应全部等于 observed Sharpe | 通过 |
-| 指数日期少于个股日期时仍能正确对齐 | 通过 |
-| 缺指数数据时明确输出 `no_index_data`，不伪装为震荡市 | 通过 |
+| `meta_label_mode=hard, threshold=0.55` 时交易次数比 baseline 减少 | 减少 15%–40% |
+| 减少交易后 OOS Sharpe | 不低于 baseline |
+| 减少交易后 OOS Calmar | 高于 baseline |
+| 单元测试：`test_meta_label.py` 中增加"接入回测"集成测试 | 通过 |
 
-### 0.3 更新配置文档
-
-`src/settings.py` 已包含较新的默认配置，但 `config.yaml.example` 和实际 `config.yaml` 缺少部分字段。需要补齐：
-
-```yaml
-trend_signal:
-  min_run_len: 1
-
-backtest:
-  atr_stop_multiplier: 0.0
-  atr_stop_period: 14
-  risk_per_trade_pct: 0.0
-  position_size_cap: 1.0
-  stop_reentry_enabled: false
-  stop_reentry_cooldown: 3
-  stop_reentry_min_run: 2
-  transaction_cost:
-    commission_buy_bps: 2.5
-    commission_sell_bps: 2.5
-    slippage_bps_per_side: 2.0
-    stamp_duty_sell_bps: 5.0
-
-wfo:
-  param_grid:
-    macd_fast: [8, 10, 12, 14]
-    macd_slow: [22, 26, 30]
-    macd_signal: [7, 9, 11]
-    min_run_len: [1, 2, 3]
-    stop_loss_pct: [0.05, 0.08, 0.10]
-```
-
----
-
-## 阶段 1：回测真实性和风险归因
-
-### 1.1 增加一字跌停无法卖出
-
-当前买入时处理了开盘一字涨停不可买，但卖出只检查停牌近似。A 股中下跌趋势的退出经常遇到跌停，忽略该规则会低估亏损和回撤。
-
-**改动**：
+**改动文件清单**：
 
 | 文件 | 内容 |
 |---|---|
-| `src/market/tradability.py` | 新增 `limit_down_px()`、`is_open_limit_down_unsellable()` |
-| `src/backtest/single_stock.py` | `_next_sell_index()` 跳过一字跌停开盘 |
-| `tests/test_tradability.py` | 增加主板、创业板、科创板跌停比例测试 |
-| `tests/test_single_stock_bt.py` | 增加卖出顺延测试 |
-
-**预期影响**：部分下跌趋势股票回撤会上升，但这是必要的真实性修正。后续收益提升必须在这个真实口径上验证。
-
-### 1.2 交易归因表
-
-每笔交易应记录更多入场和出场信息：
-
-| 字段 | 用途 |
-|---|---|
-| `entry_quality_score` | 验证高质量信号是否更赚钱 |
-| `entry_volume_ratio` | 评估量能确认有效性 |
-| `entry_atr_pct` | 判断高波动入场是否劣化收益 |
-| `entry_market_regime` | 判断牛/熊/震荡下信号表现 |
-| `entry_rs_60` | 个股相对指数 60 日强度 |
-| `exit_reason` | 统计信号退出、止损、时间止损、盈利保护的贡献 |
-| `mae` / `mfe` | 最大不利/有利波动，用于优化止损和止盈 |
-
-**新增分析**：
-
-1. 按 `entry_quality_score` 分桶统计收益、胜率、回撤。
-2. 按 `exit_reason` 统计平均收益和亏损贡献。
-3. 输出 top loss trades，检查是否由跌停、跳空、追高或低质量信号造成。
-
-### 1.3 成本和滑点压力测试
-
-保留现有 `--compare-costs`，但升级为批量报告：
-
-| 成本模型 | 目标 |
-|---|---|
-| 零成本 | 策略理论上界 |
-| 当前对称 15bps | 与历史结果兼容 |
-| 真实 A 股 | 默认生产口径 |
-| 高滑点 | 检验换手敏感性 |
-
-验收标准：真实 A 股口径相对零成本的 Sharpe 衰减不超过 0.25；若超过，应优先降低换手，而不是调参追收益。
+| `src/backtest/single_stock.py` | 增加 `meta_model`、`meta_label_threshold`、`meta_label_mode` 参数；实现 `_extract_signal_features_at()` |
+| `src/backtest/wfo.py` | 在 fold train 阶段训练 meta-label；fold OOS 时传入模型 |
+| `scripts/run_backtest_single.py` | `--meta-label-threshold`、`--meta-label-mode` CLI 参数 |
+| `scripts/run_wfo.py` | `--enable-meta-label` 参数，透传到 WFO |
+| `tests/test_meta_label.py` | 增加 end-to-end 接入回测的集成测试 |
 
 ---
 
-## 阶段 2：信号质量和特征增强
+### 阶段 9：行业与个股中长期趋势过滤
 
-### 2.1 将质量评分接入回测决策
+**为什么必须做**：Bottom 5 标的（迈瑞医疗、恒瑞医药、伊利股份等）在长达 2–3 年的行业下行中持续接到假信号。只靠大盘指数（沪深 300）无法识别行业性熊市。
 
-当前 `compute_signal_quality()` 只用于信号记录，不参与回测。下一步新增“只交易高质量信号”的策略变体。
+#### 9.1 行业相对强度特征
 
-**参数**：
+**新增文件**：`src/features/sector_features.py`
+
+```python
+def compute_sector_relative_strength(
+    ohlcv: pd.DataFrame,
+    sector_ohlcv: pd.DataFrame,  # 行业指数日线
+    *,
+    windows: tuple = (20, 60, 120),
+) -> pd.DataFrame:
+    """
+    计算个股相对行业指数的相对收益率，用于判断个股在行业中的强弱位置。
+    返回 rs_20、rs_60、rs_120 列。
+    """
+```
+
+需要配合 `src/data_fetcher/index_benchmarks.py` 扩展行业指数（医疗、消费、金融、科技、周期）的数据获取。
+
+#### 9.2 中长期趋势过滤规则
+
+在 `run_single_stock_backtest()` 中新增过滤开关：
 
 ```yaml
 signal_filter:
-  min_quality_score: 0      # 0 表示关闭
-  quality_score_mode: hard  # hard: 低于阈值不买；scale: 按质量缩放仓位
+  require_above_ma120: false        # 收盘价需在 120 日均线上方才允许 BUY
+  require_positive_rs60: false      # 60 日相对沪深 300 需为正
+  sector_ma_filter: false           # 行业指数 60 日均线需向上
+  sector_rs_window: 60              # 行业相对强度窗口
 ```
 
-**规则**：
+**过滤逻辑**（按优先级）：
 
-| 模式 | 规则 |
-|---|---|
-| `hard` | BUY 信号质量分低于阈值时跳过 |
-| `scale` | 仓位乘以 `quality_score / 100`，最低可设 floor |
-| `analysis` | 不影响交易，只输出分桶绩效 |
+```
+Level 1（最宽松）：收盘价在 MA120 上方
+  → 直接在当前 single_stock.py 中实现，不依赖行业数据
 
-**WFO 网格**：
+Level 2（中等）：个股 60 日收益跑赢沪深 300 60 日收益
+  → 需要 index_ohlcv 作为参数（已有）
 
-```yaml
-min_quality_score: [0, 20, 40, 60]
+Level 3（最严格）：行业指数 60 日均线向上 + 个股相对行业 RS 为正
+  → 需要新增行业指数数据
 ```
 
-### 2.2 增加趋势强度特征
+建议先实现 Level 1 和 Level 2，不强制依赖行业数据。
 
-DK 翻红只说明短周期趋势转正，不代表趋势足够强。建议加入：
+#### 9.3 预期效果
 
-| 特征 | 解释 | 用法 |
-|---|---|---|
-| `ma20_slope` | 20 日均线斜率 | 过滤下降趋势中的短暂反弹 |
-| `ma60_slope` | 中期趋势斜率 | 判断是否顺大趋势 |
-| `close_above_ma60` | 收盘价是否在 MA60 上方 | 作为趋势环境过滤 |
-| `donchian_20_breakout` | 20 日新高突破 | 捕捉强趋势启动 |
-| `atr_pct_rank_120` | ATR 百分位 | 高波动时减仓或过滤 |
-| `rs_60` | 个股 60 日收益减指数 60 日收益 | 只做相对强势股 |
+对 Bottom 5 标的：
+- 恒瑞医药：2021 年 2 月股价跌破 MA120 后，所有新 BUY 应被过滤，可避免 2021–2023 年的连续亏损
+- 伊利股份：类似，2022 年后低于 MA120，应停止做多
+- 迈瑞医疗：2021 年 9 月后持续低于 MA120，应全年空仓
 
-建议新增文件：
+预计 Bottom 5 亏损减少 50%–70%，Calmar 中位数显著提升。
+
+**改动文件清单**：
 
 | 文件 | 内容 |
 |---|---|
-| `src/features/trend_features.py` | 生成趋势强度、波动、量价、相对强度特征 |
-| `tests/test_trend_features.py` | 验证无未来函数、日期对齐、缺数据处理 |
-
-### 2.3 建立多信号候选池
-
-不要只围绕 MACD 参数做微调，增加几类互补信号：
-
-| 信号族 | 候选规则 | 目的 |
-|---|---|---|
-| DK 趋势 | 当前三模式和共振 | 保留现有基准 |
-| Donchian 突破 | 20/55 日新高买入，跌破 10/20 日低点卖出 | 捕捉强趋势 |
-| 均线状态 | MA20 > MA60 且 MA20 上行 | 过滤下跌反弹 |
-| 动量相对强度 | 个股 60/120 日收益跑赢指数 | 做强不做弱 |
-| 波动压缩突破 | ATR 分位低后放量突破 | 捕捉趋势启动点 |
-
-先以规则方式实现，不立即引入复杂 ML。每个信号族都必须进入同一评估框架，输出 IS/OOS、DSR、回撤和交易数。
+| `src/features/sector_features.py` | 新建：行业相对强度特征 |
+| `src/backtest/single_stock.py` | 增加 `require_above_ma120`、`require_positive_rs60` 参数 |
+| `src/data_fetcher/index_benchmarks.py` | 扩充行业指数 symbol 列表和获取逻辑 |
+| `config.yaml.example` | 补充 `signal_filter.require_above_ma120` 等字段 |
+| `tests/test_signal_filters.py` | 增加 MA120 过滤和 RS 过滤测试 |
 
 ---
 
-## 阶段 3：从规则到轻量模型
+### 阶段 10：Portfolio 层完整运行与 OOS 验证
 
-### 3.1 Meta-labeling：预测 BUY 信号是否值得交易
+**为什么必须做**：Portfolio 层代码写好了但从未产出任何数字。若组合 Sharpe 能达到 0.75，则说明横截面选股是最主要的 Alpha 来源。
 
-当前问题不是“每天预测涨跌”，而是“已有 BUY 信号中哪些值得执行”。这更适合小样本。
+**执行状态（2026-05-14）**：代码层已完成，并已运行真实数据首轮实验。入口脚本、meta-label `p_win` 排名权重、MA120/RS60 过滤透传、分数/权重/摘要导出和组合端测试均已落地；首跑结果未达目标（Sharpe 0.06，MDD 64.34%），需继续优化 WFO 稳定性、特征和组合 ranking。
 
-**样本构造**：
+#### 10.1 补全 run_portfolio_backtest.py 脚本
 
-| 项 | 设计 |
+**新建文件**：`scripts/run_portfolio_backtest.py`
+
+```bash
+python scripts/run_portfolio_backtest.py \
+  --watchlist configs/watchlist_25.txt \
+  --start 2020-01-01 --end 2026-05-08 \
+  --n-top 5 \
+  --max-per-stock 0.25 \
+  --index-symbol 510300 \
+  --export-summary data/output/portfolio_summary.csv \
+  --export-html
+```
+
+脚本需要：
+1. 从 DuckDB 批量读取所有 watchlist 股票的日线数据
+2. 同时读取沪深 300（510300）作为 `index_ohlcv`
+3. 调用 `run_portfolio_backtest()` 并输出结果
+4. 生成 HTML 报告（复用 `src/backtest/report.py`）
+
+#### 10.2 将 Meta-label p_win 整合进排名评分
+
+**改动文件**：`src/portfolio/signal_ranker.py`
+
+当前 `rank_signals()` 的评分权重：
+
+```python
+score = (
+    0.20 * trend_strength
+  + 0.25 * relative_strength
+  + 0.20 * momentum
+  + 0.15 * donchian_breakout
+  + 0.10 * liquidity
+  + 0.10 * low_volatility
+)
+```
+
+改进后，增加 Meta-label 分数权重：
+
+```python
+score = (
+    0.25 * meta_label_p_win      # 新增：模型胜率预测（最高权重）
+  + 0.20 * relative_strength
+  + 0.15 * trend_strength
+  + 0.15 * ma120_position        # 新增：是否在 MA120 上方
+  + 0.10 * momentum
+  + 0.10 * donchian_breakout
+  + 0.05 * liquidity
+)
+```
+
+#### 10.3 WFO-based 组合回测
+
+为防止过拟合，组合参数（`n_top`、权重方案、最小质量分）也应走 WFO 评估：
+
+| 参数 | 候选值 |
 |---|---|
-| 样本点 | 每个 BUY 候选信号 |
-| 标签 1 | 持有到策略原始 SELL 的交易收益是否 > 0 |
-| 标签 2 | 未来 20 日最大收益是否超过未来 10 日最大亏损 |
-| 标签 3 | 未来 20/60 日是否跑赢指数 |
-| 特征 | 阶段 2 的趋势、量能、波动、相对强度、市场状态 |
-| 切分 | 按日期滚动 WFO，禁止随机切分 |
+| `n_top` | [3, 5, 8] |
+| `weighting` | `equal`, `vol_inverse`, `score_weighted` |
+| `min_meta_score` | [0.45, 0.50, 0.55] |
+| `require_above_ma120` | [True, False] |
 
-### 3.2 模型选择
-
-优先顺序：
-
-| 模型 | 原因 |
-|---|---|
-| Logistic Regression + L1/L2 | 小样本、可解释、稳定 |
-| HistGradientBoosting / LightGBM | 捕捉非线性，但必须限制深度 |
-| Isotonic/Platt 校准 | 将概率映射为仓位 |
-
-暂不建议直接上 LSTM、Transformer 或复杂深度模型。单股日线样本很少，强行深度学习大概率只是拟合历史噪声。
-
-### 3.3 模型输出如何进入交易
-
-| 输出 | 用法 |
-|---|---|
-| `p_win` | 低于阈值不交易 |
-| `expected_edge` | 与波动率一起决定仓位 |
-| `feature_importance` | 检查模型是否依赖合理特征 |
-| `calibration_curve` | 防止概率过度自信 |
-
-建议仓位函数：
-
-```text
-position_fraction =
-  base_risk_position
-  × clip((p_win - 0.50) / 0.20, 0, 1)
-  × market_regime_multiplier
-  × drawdown_throttle
-```
-
-### 3.4 验收标准
-
-| 指标 | 要求 |
-|---|---|
-| 交易次数 | 不低于原策略 35%，避免靠极少交易抬高指标 |
-| OOS Sharpe | 相比规则基准提升至少 0.15 |
-| OOS 最大回撤 | 不高于规则基准 |
-| 特征稳定性 | top 特征在不同 WFO fold 中不能完全随机 |
-| DSR p-value | 相比规则基准改善 |
-
----
-
-## 阶段 4：退出和仓位优化
-
-### 4.1 退出逻辑升级
-
-当前退出主要依赖 DK 翻绿和止损。建议增加：
-
-| 退出 | 规则 | 目的 |
-|---|---|---|
-| 时间止损 | 入场 N 日后收益仍低于阈值则退出 | 清理无效信号 |
-| 盈利保护 | 盈利超过 X 后启用更紧 trailing stop | 减少大幅回吐 |
-| 市场风险退出 | 指数跌破 MA60 或 20 日跌幅过大时减仓/退出 | 降低系统性回撤 |
-| 信号衰减退出 | DK 仍红但趋势强度下降到阈值以下 | 早于翻绿撤退 |
-
-WFO 网格示例：
-
-```yaml
-time_stop_days: [0, 20, 40]
-time_stop_min_return: [-0.03, 0.0]
-profit_lock_trigger: [0.10, 0.20]
-profit_lock_trailing: [0.06, 0.10]
-market_exit_mode: [off, reduce, exit]
-```
-
-### 4.2 波动率目标仓位
-
-当前风险仓位依据止损距离，但没有目标波动率。增加：
-
-```yaml
-backtest:
-  volatility_target_ann: 0.18
-  volatility_lookback: 20
-  max_position_fraction: 1.0
-  min_position_fraction: 0.0
-```
-
-规则：
-
-```text
-position = min(position_size_cap, volatility_target_ann / realized_vol_ann)
-```
-
-再与 `risk_per_trade_pct`、质量分、市场状态乘子取更保守结果。
-
-### 4.3 回撤节流
-
-当策略自身净值进入回撤时降低仓位：
-
-| 当前策略回撤 | 仓位乘子 |
-|---|---:|
-| < 5% | 1.0 |
-| 5% - 10% | 0.7 |
-| 10% - 15% | 0.5 |
-| > 15% | 0.0 或 0.3 |
-
-这个机制不创造 Alpha，但能明显降低尾部回撤，适合当前最大回撤偏高的问题。
-
----
-
-## 阶段 5：WFO 和参数选择升级
-
-### 5.1 目标函数从 Sharpe 改为复合目标
-
-当前 WFO 按训练集 Sharpe 选最优，容易选中尖峰参数。建议改为：
-
-```text
-score =
-  0.45 * sharpe
-  + 0.25 * calmar
-  + 0.15 * annualized_return
-  - 0.10 * max_drawdown
-  - 0.05 * turnover_penalty
-  - stability_penalty
-```
-
-同时增加硬约束：
-
-| 约束 | 默认 |
-|---|---:|
-| 最少交易数 | 每年 >= 3 |
-| 最大回撤上限 | <= 45% |
-| DSR p-value | <= 0.20 优先 |
-| 参数稳定性 | 相邻参数组合表现不能断崖式下降 |
-
-### 5.2 选择参数平台，而不是单点最优
-
-对于二维或多维参数网格：
-
-1. 找到 top 20% 训练参数。
-2. 选择附近 OOS 表现更稳定的参数区域。
-3. 若最优点孤立，降权或放弃。
-4. 输出参数稳定性热力图和 fold 间参数漂移。
-
-### 5.3 嵌套 WFO
-
-外层用于 OOS 评估，内层用于参数选择：
-
-```text
-outer train  -> inner WFO select params -> outer OOS evaluate
-```
-
-这会降低表面收益，但能显著减少过拟合。
-
-### 5.4 参数搜索优先级
-
-第一批只搜索对当前瓶颈最相关的参数：
-
-```yaml
-wfo:
-  param_grid:
-    mode: [macd_cross, ma_cross, boll_trend, consensus]
-    min_run_len: [1, 2, 3]
-    volume_confirm: [false, true]
-    volume_ratio_min: [1.0, 1.3, 1.6]
-    stop_loss_pct: [0.0, 0.06, 0.08, 0.10]
-    atr_stop_multiplier: [0.0, 1.5, 2.0, 2.5]
-    min_quality_score: [0, 20, 40]
-```
-
-不要一次性加入太多参数。若组合数超过 1000，应先用粗网格和单因子敏感性筛选。
-
----
-
-## 阶段 6：watchlist 横截面选择和资金分配
-
-从真实结果看，收益集中于少数标的。单股策略要提升整体收益，最有效的方式之一是“只在更有优势的股票上开仓”。
-
-### 6.1 保留单股引擎，新增组合研究层
-
-新增模块建议：
-
-| 文件 | 内容 |
-|---|---|
-| `src/portfolio/signal_ranker.py` | 对 watchlist 当日 BUY 候选打分排序 |
-| `src/portfolio/allocator.py` | top N 等权、波动率倒数、行业约束 |
-| `src/portfolio/backtest.py` | 用 `src/backtest/engine.py` 或单股交易日志组合成资金曲线 |
-| `scripts/run_portfolio_backtest.py` | watchlist 组合回测入口 |
-
-### 6.2 排序分数
-
-```text
-rank_score =
-  0.30 * signal_quality
-  + 0.25 * relative_strength_60
-  + 0.20 * trend_strength
-  + 0.15 * market_regime_score
-  + 0.10 * liquidity_score
-  - 0.20 * volatility_penalty
-```
-
-### 6.3 组合约束
-
-| 约束 | 默认 |
-|---|---:|
-| 最大持仓数 | 5 |
-| 单票上限 | 25% |
-| 单行业上限 | 40% |
-| 单日换手上限 | 50% |
-| 最低成交额过滤 | 近 20 日均成交额 > 1 亿 |
-| 调仓频率 | 日信号触发，周度强制复核 |
-
-### 6.4 验收目标
-
-组合层目标应高于单股中位数：
+**验收目标**：
 
 | 指标 | 目标 |
-|---|---:|
-| 组合 OOS 年化 | 8% - 15% |
-| 组合 OOS Sharpe | > 0.7 |
-| 组合最大回撤 | < 30% |
-| 年换手 | 可解释且成本后仍盈利 |
-| 单一年份亏损 | 不超过 2 个年份或亏损可归因 |
+|---|---|
+| 组合 OOS 年化收益 | ≥ 8% |
+| 组合 OOS Sharpe | ≥ 0.75 |
+| 组合最大回撤 | ≤ 28% |
+| 组合 Calmar | ≥ 0.30 |
+| 年换手率 | 可解释且成本后仍盈利 |
+
+**改动文件清单**：
+
+| 文件 | 内容 |
+|---|---|
+| `scripts/run_portfolio_backtest.py` | 新建：组合回测入口脚本 |
+| `src/portfolio/signal_ranker.py` | 接入 meta-label p_win 分数 |
+| `src/portfolio/backtest.py` | 支持 WFO 模式评估组合参数 |
+| `tests/test_portfolio.py` | 增加端到端组合回测测试 |
 
 ---
 
-## 阶段 7：报告和研究闭环
+### 阶段 11：Meta-label 特征工程 v2
 
-### 7.1 标准研究报告
+**为什么做**：当前 `build_signal_features()` 特征全部来自短期技术指标（20日、60日均线、14日ATR等）。Meta-label 的预测能力受限于特征质量。
 
-每次实验输出一个目录：
+#### 11.1 缺失的高价值特征
 
-```text
-data/output/experiments/{YYYYMMDD}_{experiment_id}/
-  config.yaml
-  batch_summary.csv
-  wfo_summary.csv
-  trade_attribution.csv
-  regime_breakdown.csv
-  cost_sensitivity.csv
-  portfolio_summary.csv
-  report.html
-  notes.md
+| 特征类别 | 具体特征 | 计算方式 |
+|---|---|---|
+| **52 周价格位置** | `pos_52w` | `(close - low_252) / (high_252 - low_252)` |
+| **价量背离** | `pv_diverge` | 价格上涨但量能连续 5 日下降 = 分歧信号 |
+| **趋势一致性** | `trend_consistency_20` | 过去 20 日中价格高于 5 日均线的天数比例 |
+| **MACD 柱体方向** | `macd_hist_dir` | MACD 柱体是否连续 3 日扩大 |
+| **换手率分位** | `turnover_rank_60` | 当日换手率在 60 日历史中的分位数 |
+| **个股 Beta** | `beta_120` | 相对沪深 300 的 120 日滚动 Beta |
+| **价格加速度** | `close_accel_10` | MA10 的二阶差分（趋势加速/减速） |
+| **量价相关** | `vol_price_corr_20` | 20 日内成交量与价格变化的相关系数 |
+
+#### 11.2 特征稳定性检验
+
+新增 `tests/test_signal_features_stability.py`：
+
+```python
+def test_feature_importance_stability_across_folds():
+    """
+    验证 meta-label 模型在不同 WFO fold 中的 top-3 重要特征
+    不能完全随机（至少有 2 个特征在 > 50% 的 fold 中出现在 top-3）
+    """
 ```
 
-### 7.2 实验记录表
+如果特征重要性在不同 fold 间完全随机，说明模型没有学到真实规律，应放弃对应特征。
 
-新增 `data/output/experiments/index.csv`：
+#### 11.3 LightGBM 变体（可选）
 
-| 字段 | 示例 |
+当每只股票的 BUY 信号积累到 50+ 条（约 2–3 年数据）后，可尝试用 LightGBM 替换逻辑回归：
+
+```python
+# src/models/meta_label_gbm.py
+from lightgbm import LGBMClassifier
+
+class GBMMetaLabel:
+    def __init__(self, n_estimators=50, max_depth=3, min_child_samples=10):
+        """
+        限制深度和最小叶节点样本数，防止过拟合。
+        单股样本少，不建议超过 50 棵树、深度 > 4。
+        """
+```
+
+注意：**逻辑回归应保留为 baseline**，GBM 只有在 WFO 验证中明显优于逻辑回归时才切换。
+
+**改动文件清单**：
+
+| 文件 | 内容 |
 |---|---|
-| `experiment_id` | `E20260513_quality_filter_v1` |
-| `git_commit` | 当前提交 hash |
-| `config_hash` | 配置 hash |
-| `start/end` | 回测区间 |
-| `universe` | watchlist 文件 |
-| `median_sharpe` | 指标 |
-| `median_calmar` | 指标 |
-| `max_drawdown_median` | 指标 |
-| `notes` | 简短结论 |
-
-### 7.3 决策规则
-
-| 结果 | 决策 |
-|---|---|
-| 全样本收益提升，OOS 恶化 | 放弃 |
-| Sharpe 提升但最大回撤恶化 > 5pct | 只保留为高风险变体 |
-| 交易次数下降到原来的 20% 以下 | 视为样本不足，不算通过 |
-| DSR p-value 明显改善 | 优先进入下一轮 |
-| 只在单一股票有效 | 记录为个股特化参数，不作为通用策略 |
+| `src/models/meta_label.py` | 新增 11.1 中的特征到 `build_signal_features()` |
+| `src/models/meta_label_gbm.py` | 新建：GBM 变体（可选） |
+| `tests/test_signal_features_stability.py` | 新建：特征稳定性检验 |
 
 ---
 
-## 5. 具体实验矩阵
+### 阶段 12：WFO 稳定性架构升级
 
-| ID | 实验 | 假设 | 主要文件 | 验收 |
-|---|---|---|---|---|
-| E0 | 统一参数和修复检验 | 先让结果可信 | `scripts/*`, `src/backtest/permutation_test.py` | 单股/批量/WFO 口径一致 |
-| E1 | 一字跌停卖出顺延 | 真实回撤更高但更可信 | `tradability.py`, `single_stock.py` | 新测试通过 |
-| E2 | 质量分硬过滤 | 低分 BUY 是亏损来源 | `generator.py`, `single_stock.py` | OOS Sharpe +0.10 |
-| E3 | 质量分缩放仓位 | 高质量信号应承担更多风险 | `single_stock.py` | 回撤不升，收益提升 |
-| E4 | 相对强度过滤 | 只做跑赢指数的股票 | `features/trend_features.py` | Bottom 标的亏损减少 |
-| E5 | 市场状态乘子 | 熊市和震荡市应降仓 | `risk_metrics.py`, `single_stock.py` | MDD 中位数下降 |
-| E6 | Donchian 突破信号 | 强趋势启动比 DK 翻色更稳 | `indicators/`, `signals/` | 强趋势股收益提升 |
-| E7 | 时间止损 | 无效交易应更早退出 | `single_stock.py` | 平均亏损下降 |
-| E8 | 盈利保护 | 减少趋势回吐 | `single_stock.py` | Calmar 提升 |
-| E9 | 复合 WFO 目标 | 降低参数过拟合 | `wfo.py` | IS/OOS 相关改善 |
-| E10 | Meta-label logistic | 预测 BUY 是否值得做 | `src/models/` | OOS Sharpe 明显提升 |
-| E11 | Top N watchlist 组合 | 资金集中到优势标的 | `src/portfolio/` | 组合 Sharpe > 0.7 |
-| E12 | 报告闭环 | 实验可复现 | `src/backtest/report.py` | 每次实验有完整目录 |
+**为什么做**：4/5 标的 IS/OOS 相关系数为负，当前 WFO 选参数是在过拟合。
+
+#### 12.1 跨 Fold 稳定性加权
+
+**改动文件**：`src/backtest/wfo.py`
+
+当前逻辑：每个 fold 独立选最优参数，fold 间参数可以完全不同。
+
+新逻辑：对参数组合计算"跨 fold 稳定性分"，选择**表现稳定但不一定最高**的参数区域：
+
+```python
+def _select_stable_params(fold_results: list[dict]) -> dict:
+    """
+    对所有参数组合，计算：
+    - is_score_mean: 平均 IS 复合分
+    - is_score_std: IS 分的标准差（越小越稳定）
+    - oos_score_mean: 平均 OOS 分（用于验证，不选择）
+
+    选择标准：
+    stability_score = is_score_mean / (is_score_std + 0.1)
+
+    返回 stability_score top-5 的参数中位数（而不是最高 IS 的参数）
+    """
+```
+
+#### 12.2 参数漂移惩罚
+
+在 WFO 目标函数中加入相邻 fold 参数跳变惩罚：
+
+```python
+stability_penalty = abs(current_best_param_set - previous_fold_best_params).sum()
+score -= 0.05 * stability_penalty
+```
+
+如果相邻 fold 最优参数差异过大（如 macd_fast 从 8 跳到 14），说明参数敏感，应降权。
+
+#### 12.3 参数热力图输出
+
+**改动文件**：`scripts/run_wfo.py`
+
+当前已有 `--plot-heatmap` 选项，但热力图只显示 IS Sharpe。改进为输出三层热力图：
+- IS 复合分热力图
+- OOS 复合分热力图
+- IS/OOS 相关性热力图（颜色越绿说明参数越稳定）
+
+#### 12.4 最小 fold 数量要求
+
+当 WFO fold 数量 < 5 时（数据太短），禁止使用 WFO 参数选择结果，回退到默认参数。
+
+**改动文件清单**：
+
+| 文件 | 内容 |
+|---|---|
+| `src/backtest/wfo.py` | `_select_stable_params()`；稳定性加权；参数漂移惩罚 |
+| `scripts/run_wfo.py` | 三层热力图输出 |
+| `tests/test_wfo_params_split.py` | 新增稳定性选择的单元测试 |
+
+---
+
+### 阶段 13：多周期信号确认（减少假信号）
+
+**为什么做**：当前所有信号都是日线维度，没有更大周期（周线）的趋势确认。在日线震荡但周线仍向下时，日线 DK 翻红是假信号的概率极高。
+
+#### 13.1 周线趋势状态
+
+**新增文件**：`src/features/weekly_trend.py`
+
+```python
+def compute_weekly_trend_state(
+    daily_ohlcv: pd.DataFrame,
+    *,
+    ma_windows: tuple = (5, 13),  # 周线约 = 日线 25/65 日
+) -> pd.Series:
+    """
+    将日线数据聚合为周线 OHLCV，计算周线 MA5/MA13 方向，
+    返回每个交易日对应的周线趋势状态：'bullish', 'bearish', 'neutral'
+    """
+```
+
+#### 13.2 多周期共振过滤
+
+在 `run_single_stock_backtest()` 中新增：
+
+```yaml
+signal_filter:
+  require_weekly_bullish: false  # 周线趋势向上时才允许日线 BUY 信号
+  weekly_ma_fast: 5              # 周线快均线（周数）
+  weekly_ma_slow: 13             # 周线慢均线（周数）
+```
+
+**预期效果**：在震荡市中减少 30%–50% 的假 BUY 信号（以历史回测为准）。
+
+#### 13.3 月度趋势状态（可选）
+
+对于 Calmar 极低的标的，还可加入月线 MA3/MA6 状态。但月线信号变化极慢，仅适合作为"允许/不允许"的开关，而不是精确择时工具。
+
+**改动文件清单**：
+
+| 文件 | 内容 |
+|---|---|
+| `src/features/weekly_trend.py` | 新建：日线聚合周线趋势计算 |
+| `src/backtest/single_stock.py` | 接入周线趋势过滤参数 |
+| `tests/test_weekly_trend.py` | 新建：聚合逻辑、周线方向测试 |
+
+---
+
+### 阶段 14：动态仓位精细化
+
+**为什么做**：当前最大回撤 47% 的一个重要来源是**入场时机虽对但仓位过满**——特别是在高波动期，波动率目标仓位没有足够压低杠杆。
+
+#### 14.1 EWMA 波动率估计替代简单滚动窗口
+
+**改动文件**：`src/backtest/single_stock.py`
+
+当前波动率估计使用 20 日简单滚动标准差，对波动突变反应慢。替换为 EWMA：
+
+```python
+def _ewma_volatility(returns: pd.Series, span: int = 20) -> pd.Series:
+    """指数加权移动波动率，对近期波动变化更敏感。"""
+    return returns.ewm(span=span).std() * np.sqrt(252)
+```
+
+当 EWMA 波动率 > 1.5 倍历史中位数时，仓位自动降至 50%。
+
+#### 14.2 仓位决策树（明确优先级）
+
+将当前散落在不同地方的仓位调整逻辑统一为一棵决策树：
+
+```
+base_position = 1.0
+  × meta_label_scale          （阶段 8）
+  × ma120_position_scale       （阶段 9：MA120 以下 = 0.5）
+  × weekly_trend_scale         （阶段 13：周线熊市 = 0.5）
+  × volatility_target_scale    （目标波动率 / 当前 EWMA 波动率）
+  × drawdown_throttle_scale    （回撤节流，现有）
+  × market_regime_scale        （大盘状态，现有）
+  clip(0.0, position_size_cap)
+```
+
+所有乘子明确定义，不隐式叠加。
+
+#### 14.3 止损距离与仓位联动
+
+当 ATR 止损距离超过 `risk_per_trade_pct` 隐含的仓位时，**强制以风险为约束**而不是以目标仓位为约束：
+
+```python
+if atr_stop_multiplier > 0:
+    atr_stop_distance = atr * atr_stop_multiplier / close
+    if risk_per_trade_pct > 0:
+        risk_based_position = risk_per_trade_pct / atr_stop_distance
+        position_frac = min(position_frac, risk_based_position)
+```
+
+**改动文件清单**：
+
+| 文件 | 内容 |
+|---|---|
+| `src/backtest/single_stock.py` | EWMA 波动率；统一仓位决策树；ATR 止损联动 |
+| `tests/test_position_management.py` | 新增 EWMA 波动率和仓位决策树测试 |
+
+---
+
+### 阶段 15：实验闭环与报告完善
+
+**执行状态（2026-05-14）**：首版已完成。实验目录创建时会写入 `ARTIFACTS.md` 标准产物清单和 `DELTA.md` 占位；新增实验指标读取、指标方向判断、Bootstrap CI 重叠标记、HTML 对比报告和 Markdown delta 输出；新增 `scripts/compare_experiments.py` 作为命令行入口。
+
+#### 15.1 实验目录结构强化
+
+当前已有实验目录结构，补充以下内容，并由 `src/backtest/experiment.py` 维护标准产物清单：
+
+```text
+data/output/experiments/{YYYYMMDD}_{exp_id}/
+  config.yaml                    # 已有
+  batch_summary.csv              # 已有
+  wfo_summary.csv                # 已有
+  trade_attribution.csv          # 已有
+  portfolio_summary.csv          # 新增（阶段 10）
+  meta_label_calibration.csv     # 新增（阶段 8）
+  feature_importance.csv         # 新增（阶段 11）
+  regime_breakdown.csv           # 已有
+  stability_heatmap.html         # 新增（阶段 12）
+  report.html                    # 已有
+  DELTA.md                       # 新增：与上一个实验的差异摘要
+```
+
+#### 15.2 自动化对比报告
+
+已新增 `scripts/compare_experiments.py`：
+
+```bash
+python scripts/compare_experiments.py \
+  --baseline data/output/experiments/E07_phase7_complete \
+  --current  data/output/experiments/E08_meta_label_integrated \
+  --output   data/output/experiments/comparison.html \
+  --write-delta
+```
+
+输出标准化对比表：每个指标的变化幅度、方向判断、CSV 明细，以及统计显著性辅助标记（当输入摘要包含 `*_ci_low` / `*_ci_high` 时计算 Bootstrap CI 是否重叠）。`--write-delta` 会把摘要写回当前实验目录的 `DELTA.md`。
+
+---
+
+## 5. 实验矩阵
+
+| ID | 实验 | 主要假设 | 核心文件 | 单股验收 | 组合验收 |
+|---|---|---|---|---|---|
+| E8a | Meta-label hard 过滤（threshold=0.52） | 过滤低胜率信号减少亏损 | `single_stock.py`, `meta_label.py` | OOS Calmar +20% | — |
+| E8b | Meta-label scale 仓位（0.3~1.0） | 高胜率信号满仓，低胜率轻仓 | `single_stock.py` | MDD ↓，收益持平 | — |
+| E9a | MA120 过滤（require_above_ma120=True） | Bottom 股票主要亏损在 MA120 下方 | `single_stock.py` | Bottom 5 亏损 -50% | — |
+| E9b | RS60 过滤（require_positive_rs60=True） | 只做跑赢大盘的股票 | `single_stock.py` | Sharpe 提升 | — |
+| E10 | 运行 portfolio 并报告 OOS 数字 | 组合 Sharpe 应明显高于单股中位数 | `run_portfolio_backtest.py` | — | Sharpe ≥ 0.75 |
+| E11a | Meta-label 新增特征（52W 位置、Beta、加速度） | 更好特征提升预测准确率 | `meta_label.py` | 精确率提升 ≥ 5% | — |
+| E11b | LightGBM 替换逻辑回归 | GBM 对非线性有更强表达 | `meta_label_gbm.py` | OOS Sharpe > 逻辑回归 | — |
+| E12 | WFO 稳定性加权选参 | 减少过拟合，IS/OOS 相关转正 | `wfo.py` | IS/OOS 相关 > 0 | — |
+| E13 | 周线趋势过滤 | 周线熊市中日线 BUY 是假信号 | `weekly_trend.py` | 假信号减少，胜率提升 | — |
+| E14 | EWMA 波动率 + 统一仓位决策树 | 高波动期减仓控回撤 | `single_stock.py` | MDD ≤ 38% | — |
+| E_FINAL | 全部开关组合最优配置 | 各改进叠加效果验证 | 所有 | Sharpe ≥ 0.40 | Sharpe ≥ 0.75 |
 
 ---
 
 ## 6. 推荐实施顺序
 
-### 第 1 周：修正评估口径
+### 第 1 周（最高 ROI，代码已存在）
 
-1. 抽出统一回测参数构造。
-2. 修复置换检验、市场状态对齐、ATR exit 检测、一字跌停卖出。
-3. 更新 `config.yaml.example` 和 `docs/backtest_guide.md`。
-4. 重跑当前策略作为新 baseline。
+优先完成 **E8a**（Meta-label hard 过滤接入）和 **E9a**（MA120 过滤）：
 
-输出：
+1. 在 `single_stock.py` 中增加 `meta_model` 参数和 `_extract_signal_features_at()`
+2. 在 WFO 的 fold 内部添加 meta-label 训练和传递逻辑
+3. 增加 `require_above_ma120=True` 参数
+4. 对 Bottom 5 标的单独跑验证：`run_backtest_single.py --symbol 600276 --require-above-ma120`
+5. 重跑 batch_summary，建立新 baseline
 
-```text
-data/output/experiments/E0_baseline_fixed/
-```
+输出：`data/output/experiments/E08_E09_baseline/`
 
-### 第 2 周：信号质量和特征
+### 第 2 周（组合层上线）
 
-1. `trade_log` 增加入场质量、量能、波动、相对强度字段。
-2. 实现质量分硬过滤和仓位缩放。
-3. 新增趋势强度和相对强度特征。
-4. 对 25 只 watchlist 做质量分桶分析。
+完成 **E10**（Portfolio 层运行）：
 
-输出：
+1. 编写 `scripts/run_portfolio_backtest.py`
+2. 把 `p_win` 接入 `signal_ranker.py`
+3. 对 25 只 watchlist 运行完整组合回测
+4. 生成 `portfolio_summary.csv` 和 HTML 报告
+5. 跑 WFO 版本（组合参数 n_top=3/5/8 + weighting 方案）
 
-```text
-quality_bucket_report.csv
-feature_attribution.csv
-```
+输出：`data/output/experiments/E10_portfolio_oos/`
 
-### 第 3 周：退出和仓位
+### 第 3 周（特征和 WFO 优化）
 
-1. 时间止损。
-2. 盈利保护 trailing。
-3. 市场状态乘子和回撤节流。
-4. 组合到 WFO 网格中做受控搜索。
+完成 **E11a**（新特征）和 **E12**（WFO 稳定性）：
 
-目标：最大回撤中位数从 50.33% 压到 35% - 40% 区间。
+1. 在 `build_signal_features()` 中添加新特征
+2. 对 5 只 WFO 标的重跑，验证 IS/OOS 相关性是否改善
+3. 实现稳定性加权参数选择
+4. 输出三层热力图
 
-### 第 4 周：WFO 升级和组合层
+输出：`data/output/experiments/E11_E12_wfo_stable/`
 
-1. WFO 目标函数改为复合目标。
-2. 实现参数平台选择。
-3. 建立 watchlist top N 组合回测。
-4. 生成最终研究报告。
+### 第 4 周（多周期 + 仓位整合）
 
-目标：组合 OOS Sharpe > 0.7，最大回撤 < 30%。
+完成 **E13**（周线过滤）和 **E14**（统一仓位决策树）：
+
+1. 实现 `weekly_trend.py`
+2. 统一仓位决策树，消除隐式叠加
+3. 用全量 watchlist 跑最终组合
+
+最终目标：`E_FINAL` 组合 Sharpe ≥ 0.75，单股 Sharpe 中位数 ≥ 0.40。
 
 ---
 
 ## 7. 验证命令
 
-基础测试：
+### Meta-label 接入验证（阶段 8）
 
 ```bash
-pytest
+# 无 meta-label（baseline）
+python scripts/run_backtest_single.py --symbol 600276 --start 2020-01-01 --end 2026-05-08
+
+# 开启 meta-label（hard 过滤）
+python scripts/run_backtest_single.py --symbol 600276 --start 2020-01-01 --end 2026-05-08 \
+  --meta-label-mode hard --meta-label-threshold 0.52
+
+# WFO 内含 meta-label
+python scripts/run_wfo.py --symbol 300750 --start 2020-01-01 --end 2026-05-08 \
+  --enable-meta-label --train-days 504 --oos-days 126
 ```
 
-单股基准：
+### MA120 过滤验证（阶段 9）
 
 ```bash
-python scripts/run_backtest_single.py --symbol 600036 --start 2020-01-01 --end 2026-05-08 --export-html --compare-costs --permutation-test --n-permutations 500
+# 对 Bottom 5 标的验证 MA120 过滤效果
+for sym in 300760 600276 600887 600585 000651; do
+  python scripts/run_backtest_single.py --symbol $sym \
+    --start 2020-01-01 --end 2026-05-08 \
+    --require-above-ma120 \
+    --export-html
+done
 ```
 
-批量基准：
+### 组合回测（阶段 10）
 
 ```bash
-python scripts/run_batch_backtest.py \
+python scripts/run_portfolio_backtest.py \
   --watchlist configs/watchlist_25.txt \
-  --start 2020-01-01 \
-  --end 2026-05-08 \
-  --export-summary data/output/batch_baseline_fixed.csv \
+  --start 2020-01-01 --end 2026-05-08 \
+  --n-top 5 \
+  --enable-meta-label \
+  --require-above-ma120 \
+  --export-summary data/output/portfolio_final.csv \
   --export-html
 ```
 
-WFO 基准：
+### WFO 稳定性检验（阶段 12）
 
 ```bash
-python scripts/run_wfo.py --symbol 600036 --start 2020-01-01 --end 2026-05-08 --train-days 504 --oos-days 126 --export-results --plot-heatmap
-python scripts/run_wfo.py --symbol 300750 --start 2020-01-01 --end 2026-05-08 --train-days 504 --oos-days 126 --export-results --plot-heatmap
-python scripts/run_wfo.py --symbol 300760 --start 2020-01-01 --end 2026-05-08 --train-days 504 --oos-days 126 --export-results --plot-heatmap
+# 验证 IS/OOS 相关性是否改善
+for sym in 002475 300059 300750 600036 601166; do
+  python scripts/run_wfo.py --symbol $sym \
+    --start 2020-01-01 --end 2026-05-08 \
+    --train-days 504 --oos-days 126 \
+    --stability-weighting \
+    --plot-heatmap \
+    --export-results
+done
 ```
 
-选择这三只股票的原因：
+### 周线过滤与 EWMA 仓位验证（阶段 13/14）
 
-| 标的 | 角色 |
-|---|---|
-| 600036 招商银行 | 中等稳定收益样本 |
-| 300750 宁德时代 | 强趋势高收益样本 |
-| 300760 迈瑞医疗 | 当前策略失败样本 |
+```bash
+# 周线趋势过滤：只允许周线 bullish 时执行日线 BUY
+python scripts/run_backtest_single.py --symbol 600276 \
+  --start 2020-01-01 --end 2026-05-08 \
+  --require-weekly-bullish --weekly-ma-fast 5 --weekly-ma-slow 13
+
+# EWMA 波动率目标仓位 + 高波动折扣
+python scripts/run_backtest_single.py --symbol 300750 \
+  --start 2020-01-01 --end 2026-05-08 \
+  --volatility-target-ann 0.18 \
+  --volatility-lookback 20 \
+  --volatility-high-vol-multiple 1.5 \
+  --volatility-high-vol-scale 0.5
+```
 
 ---
 
 ## 8. 文件级路线图
 
-| 文件/目录 | 任务 |
-|---|---|
-| `src/backtest/config.py` | 新增统一回测参数构造 |
-| `src/backtest/single_stock.py` | 卖出跌停顺延、质量分入场、时间止损、盈利保护、波动仓位、回撤节流 |
-| `src/backtest/permutation_test.py` | 修复置换逻辑，改为信号时点置换 |
-| `src/backtest/performance_panel.py` | 日期对齐版 regime breakdown |
-| `src/backtest/wfo.py` | 复合目标、稳定平台、更多参数透传 |
-| `src/market/tradability.py` | 跌停不可卖出 |
-| `src/features/trend_features.py` | 新增趋势、量能、波动、相对强度特征 |
-| `src/models/meta_label.py` | 轻量模型训练和预测 |
-| `src/portfolio/` | watchlist 排名和组合回测 |
-| `scripts/run_batch_backtest.py` | 与单股入口统一参数 |
-| `scripts/run_wfo.py` | 完整策略参数和新报告 |
-| `scripts/run_portfolio_backtest.py` | 新增组合层入口 |
-| `config.yaml.example` | 补齐当前默认配置 |
-| `docs/backtest_guide.md` | 更新真实执行和验证说明 |
-| `tests/` | 每个新增行为必须有回归测试 |
+| 文件/目录 | 阶段 | 改动内容 |
+|---|---|---|
+| `src/backtest/single_stock.py` | 8, 9, 13, 14 | meta_model 参数；require_above_ma120；EWMA 波动率；统一仓位决策树 |
+| `src/backtest/wfo.py` | 8, 12 | fold 内 meta-label 训练；稳定性加权选参；参数漂移惩罚 |
+| `src/models/meta_label.py` | 11 | 新增 8 个特征到 `build_signal_features()` |
+| `src/models/meta_label_gbm.py` | 11 | 新建：GBM 变体（可选） |
+| `src/features/sector_features.py` | 9 | 新建：行业相对强度特征 |
+| `src/features/weekly_trend.py` | 13 | 新建：周线趋势聚合 |
+| `src/portfolio/signal_ranker.py` | 10 | 接入 p_win 作为核心权重 |
+| `src/portfolio/backtest.py` | 10 | 支持 WFO 模式 |
+| `src/data_fetcher/index_benchmarks.py` | 9 | 扩充行业指数 symbol 列表 |
+| `scripts/run_backtest_single.py` | 8, 9, 13 | CLI：`--meta-label-*`、`--require-above-ma120`、`--require-weekly-bullish` |
+| `scripts/run_wfo.py` | 8, 12 | `--enable-meta-label`、`--stability-weighting`；三层热力图 |
+| `scripts/run_portfolio_backtest.py` | 10 | 新建：组合回测入口 |
+| `scripts/compare_experiments.py` | 15 | 新建：实验对比报告 |
+| `config.yaml.example` | 8, 9, 13 | 补充新增参数的示例配置 |
+| `tests/test_meta_label.py` | 8, 11 | 端到端接入回测集成测试；特征稳定性测试 |
+| `tests/test_signal_filters.py` | 9, 13 | MA120 过滤；RS60 过滤；周线过滤测试 |
+| `tests/test_wfo_params_split.py` | 12 | 稳定性选参单元测试 |
+| `tests/test_position_management.py` | 14 | EWMA 波动率；统一仓位决策树 |
 
 ---
 
-## 9. 风险和边界
+## 9. 风险和边界条件
 
-1. 不保证任何策略在未来一定赚钱，所有收益目标都是研究验收阈值。
-2. 不在单股日线小样本上直接使用深度学习。
-3. 不使用随机切分评估时间序列模型。
-4. 不接受只靠减少交易次数得到的漂亮 Sharpe。
-5. 不接受未计真实成本、跌停卖出约束和 OOS 检验的收益提升。
-6. 若组合层收益显著优于单股层，应承认主要 Alpha 来自横截面选择，而不是单股择时本身。
+1. **Meta-label 样本不足问题**：单股 6 年日线数据中 BUY 信号通常只有 50–60 次，逻辑回归样本勉强够用，GBM 要设置严格正则化。绝对不能用随机切分，必须 WFO。
+
+2. **MA120 过滤可能过滤太多**：对于强趋势股（宁德时代、立讯精密），它们本来就在 MA120 上方，过滤不影响；但对于波动大的股票，可能会错过底部反转。建议先跑验证再决定是否默认开启。
+
+3. **行业数据可用性**：行业指数数据依赖 AkShare，若数据不完整需降级到沪深 300 作为通用过滤。
+
+4. **组合层的"过拟合"风险**：组合参数（n_top、权重方案）也需要 WFO 验证，不能只看全样本收益。
+
+5. **不追求零回撤**：Calmar 目标 0.20 对应的是 25% 最大回撤下 5% 年化，是合理的单股趋势策略目标，不应为了降低回撤而完全空仓。
+
+6. **成功标准仍然是 OOS**：任何改动只有在 OOS 指标改善时才算通过。全样本收益提升但 WFO OOS 恶化的改动一律放弃。
 
 ---
 
-## 10. 下一步执行清单
+## 10. 执行优先级清单
 
-优先级从高到低：
+按 ROI 从高到低：
 
-1. 修复评估链路：统一参数、置换检验、日期对齐、跌停卖出、ATR exit 检测。
-2. 重跑 `batch_summary` 和 3 只代表股票 WFO，建立可信 baseline。
-3. 把质量评分接入交易，做 `min_quality_score` 分桶实验。
-4. 增加相对强度和趋势强度特征，评估能否减少 Bottom 股票亏损。
-5. 增加时间止损、盈利保护、波动仓位、市场状态乘子，目标先压回撤。
-6. 改造 WFO 目标函数，使用参数平台而不是单点最高 Sharpe。
-7. 建立 watchlist top N 组合回测，验证收益是否能从“少数强股”转为“组合稳定收益”。
-
+1. **接入 Meta-label**（`single_stock.py` + `wfo.py`）——模型已有，只差最后一步，ROI 极高
+2. **MA120 + RS60 过滤**——可直接切断 Bottom 5 的主要亏损来源，实现简单
+3. **运行 Portfolio 回测脚本**——填补最大数据空白，验证组合 Sharpe 假设
+4. **WFO 稳定性加权**——修正 IS/OOS 负相关问题，让参数选择更可信
+5. **新增 Meta-label 特征**（52W、Beta、加速度、量价相关）——提升模型表达力
+6. **周线趋势过滤**——进一步减少震荡市假信号
+7. **统一仓位决策树 + EWMA 波动率**——精细化风控，压低尾部回撤
+8. **实验对比报告自动化**——提升研究效率，不直接创造 Alpha

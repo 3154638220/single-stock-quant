@@ -38,6 +38,20 @@ def main() -> int:
     parser.add_argument("--nested", action="store_true", help="Use nested WFO (outer→inner) for honest OOS evaluation")
     parser.add_argument("--inner-train-days", type=int, default=504, help="Inner WFO train days (for --nested)")
     parser.add_argument("--inner-oos-days", type=int, default=126, help="Inner WFO OOS days (for --nested)")
+    parser.add_argument("--enable-meta-label", action="store_true", help="Train a fold-local meta-label model and use it in each OOS fold")
+    parser.add_argument("--meta-label-mode", choices=["hard", "scale"], default="hard")
+    parser.add_argument("--meta-label-threshold", type=float, default=0.50)
+    parser.add_argument("--meta-label-min-samples", type=int, default=10)
+    parser.add_argument("--stability-weighting", action="store_true", help="Report cross-fold stable parameter selection; nested WFO uses it for inner selection")
+    parser.add_argument("--require-above-ma120", action="store_true", help="Only allow BUY signals when close is above MA120")
+    parser.add_argument("--require-positive-rs60", action="store_true", help="Only allow BUY signals that outperform the benchmark over 60 bars")
+    parser.add_argument("--require-weekly-bullish", action="store_true", help="Only allow BUY signals when weekly trend is bullish")
+    parser.add_argument("--weekly-ma-fast", type=int, help="Fast weekly MA window for --require-weekly-bullish")
+    parser.add_argument("--weekly-ma-slow", type=int, help="Slow weekly MA window for --require-weekly-bullish")
+    parser.add_argument("--volatility-target-ann", type=float, help="Annualized volatility target for EWMA position scaling")
+    parser.add_argument("--volatility-lookback", type=int, help="EWMA volatility span in trading bars")
+    parser.add_argument("--volatility-high-vol-multiple", type=float, help="High-volatility trigger as a multiple of expanding median EWMA vol")
+    parser.add_argument("--volatility-high-vol-scale", type=float, help="Maximum position multiplier when high-volatility trigger fires")
     parser.add_argument("--export-results", action="store_true")
     parser.add_argument("--plot-heatmap", action="store_true")
     parser.add_argument("--config", help="Config file path")
@@ -56,6 +70,24 @@ def main() -> int:
     # WFO search overrides the base trend mode; clear consensus if not in grid.
     if cfg.get("trend_signal", {}).get("mode") != "consensus":
         bt_kwargs["consensus_n_agree"] = None
+    if args.require_above_ma120:
+        bt_kwargs["require_above_ma120"] = True
+    if args.require_positive_rs60:
+        bt_kwargs["require_positive_rs60"] = True
+    if args.require_weekly_bullish:
+        bt_kwargs["require_weekly_bullish"] = True
+    if args.weekly_ma_fast is not None:
+        bt_kwargs["weekly_ma_fast"] = args.weekly_ma_fast
+    if args.weekly_ma_slow is not None:
+        bt_kwargs["weekly_ma_slow"] = args.weekly_ma_slow
+    if args.volatility_target_ann is not None:
+        bt_kwargs["volatility_target_ann"] = args.volatility_target_ann
+    if args.volatility_lookback is not None:
+        bt_kwargs["volatility_lookback"] = args.volatility_lookback
+    if args.volatility_high_vol_multiple is not None:
+        bt_kwargs["volatility_high_vol_multiple"] = args.volatility_high_vol_multiple
+    if args.volatility_high_vol_scale is not None:
+        bt_kwargs["volatility_high_vol_scale"] = args.volatility_high_vol_scale
 
     if args.nested:
         result = run_nested_walk_forward_optimization(
@@ -72,6 +104,11 @@ def main() -> int:
             cost_bps=bt_kwargs.pop("cost_bps"),
             initial_capital=bt_kwargs.pop("initial_capital"),
             bt_kwargs=bt_kwargs,
+            enable_meta_label=args.enable_meta_label,
+            meta_label_threshold=args.meta_label_threshold,
+            meta_label_mode=args.meta_label_mode,
+            meta_label_min_samples=args.meta_label_min_samples,
+            stability_weighting=args.stability_weighting,
         )
 
         agg = result["aggregated"]
@@ -89,6 +126,10 @@ def main() -> int:
                 f"Param drift across outer folds: mean={drift.get('mean_drift', float('nan')):.3f} "
                 f"max={drift.get('max_drift', float('nan')):.3f}"
             )
+        if args.stability_weighting:
+            used = sum(1 for x in result.get("stable_params_by_outer_fold", []) if x.get("used"))
+            total = len(result.get("stable_params_by_outer_fold", []))
+            print(f"Stable params: used in {used}/{total} outer folds")
 
         outer_folds = result.get("outer_folds", [])
         if outer_folds:
@@ -112,6 +153,11 @@ def main() -> int:
             cost_bps=bt_kwargs.pop("cost_bps"),
             initial_capital=bt_kwargs.pop("initial_capital"),
             bt_kwargs=bt_kwargs,
+            enable_meta_label=args.enable_meta_label,
+            meta_label_threshold=args.meta_label_threshold,
+            meta_label_mode=args.meta_label_mode,
+            meta_label_min_samples=args.meta_label_min_samples,
+            stability_weighting=args.stability_weighting,
         )
 
         agg = result["aggregated"]
@@ -140,6 +186,16 @@ def main() -> int:
         n_isolated = sum(1 for pf in platform_by_fold if pf.get("platform_info", {}).get("is_isolated"))
         if platform_by_fold:
             print(f"Platform: {n_isolated}/{len(platform_by_fold)} folds picked non-peak platform (isolated peak avoided)")
+        stable_selection = result.get("stable_parameter_selection", {})
+        if args.stability_weighting:
+            print(
+                "Stable params: "
+                f"used={stable_selection.get('used')} "
+                f"params={stable_selection.get('params', {})}"
+            )
+        if args.enable_meta_label:
+            n_meta = sum(1 for pf in platform_by_fold if pf.get("meta_label_trained"))
+            print(f"Meta-label: trained in {n_meta}/{len(platform_by_fold)} OOS folds")
 
     if args.export_results:
         out_dir = project_root() / str(cfg.get("paths", {}).get("output_dir", "data/output"))

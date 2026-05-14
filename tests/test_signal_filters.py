@@ -1,5 +1,6 @@
 import pandas as pd
 
+from src.backtest.single_stock import run_single_stock_backtest
 from src.indicators import DKTrendParams, TrendMode, compute_dktrend
 from src.signals import (
     compute_consensus_trend,
@@ -22,6 +23,16 @@ def _df(closes: list[float], extra: dict | None = None) -> pd.DataFrame:
     if extra:
         data.update(extra)
     return pd.DataFrame(data)
+
+
+def _trend_override(df: pd.DataFrame, buy_idx: int) -> pd.DataFrame:
+    trend = df.copy()
+    trend["dk_signal"] = ""
+    trend["dk_color"] = "green"
+    trend["dk_run_len"] = 1
+    trend.loc[buy_idx, "dk_signal"] = "buy"
+    trend.loc[buy_idx:, "dk_color"] = "red"
+    return trend
 
 
 # ── Persistence filter (min_run_len) ───────────────────────────
@@ -124,3 +135,88 @@ class TestSignalQuality:
             for r in buy_records:
                 assert 0.0 <= r.quality_score <= 100.0
         # if no buys, that's fine — trend data may not produce consensus signals
+
+
+class TestSingleStockEntryFilters:
+    def test_require_above_ma120_blocks_below_long_ma(self):
+        closes = [10.0] * 130
+        df = _df(closes)
+        trend = _trend_override(df, buy_idx=121)
+
+        baseline = run_single_stock_backtest(
+            "600000",
+            df,
+            DKTrendParams(mode=TrendMode.MACD_CROSS),
+            cost_bps=0,
+            initial_capital=10000,
+            trend_override=trend,
+        )
+        filtered = run_single_stock_backtest(
+            "600000",
+            df,
+            DKTrendParams(mode=TrendMode.MACD_CROSS),
+            cost_bps=0,
+            initial_capital=10000,
+            trend_override=trend,
+            require_above_ma120=True,
+        )
+
+        assert baseline.n_trades == 1
+        assert filtered.n_trades == 0
+
+    def test_require_positive_rs60_blocks_stock_weaker_than_index(self):
+        closes = [12.0] * 10 + [11.5] * 30 + [10.0] * 90
+        df = _df(closes)
+        index_df = _df([100.0] * len(closes), extra={"symbol": ["510300"] * len(closes)})
+        trend = _trend_override(df, buy_idx=80)
+
+        baseline = run_single_stock_backtest(
+            "600000",
+            df,
+            DKTrendParams(mode=TrendMode.MACD_CROSS),
+            cost_bps=0,
+            initial_capital=10000,
+            trend_override=trend,
+            index_ohlcv=index_df,
+        )
+        filtered = run_single_stock_backtest(
+            "600000",
+            df,
+            DKTrendParams(mode=TrendMode.MACD_CROSS),
+            cost_bps=0,
+            initial_capital=10000,
+            trend_override=trend,
+            index_ohlcv=index_df,
+            require_positive_rs60=True,
+        )
+
+        assert baseline.n_trades == 1
+        assert filtered.n_trades == 0
+
+    def test_require_weekly_bullish_blocks_daily_buy_in_weekly_downtrend(self):
+        closes = list(pd.Series(range(100, 20, -1), dtype=float))
+        df = _df(closes)
+        trend = _trend_override(df, buy_idx=60)
+
+        baseline = run_single_stock_backtest(
+            "600000",
+            df,
+            DKTrendParams(mode=TrendMode.MACD_CROSS),
+            cost_bps=0,
+            initial_capital=10000,
+            trend_override=trend,
+        )
+        filtered = run_single_stock_backtest(
+            "600000",
+            df,
+            DKTrendParams(mode=TrendMode.MACD_CROSS),
+            cost_bps=0,
+            initial_capital=10000,
+            trend_override=trend,
+            require_weekly_bullish=True,
+            weekly_ma_fast=2,
+            weekly_ma_slow=3,
+        )
+
+        assert baseline.n_trades == 1
+        assert filtered.n_trades == 0

@@ -17,6 +17,7 @@ if str(ROOT) not in sys.path:
 from src.backtest.config import build_bt_kwargs
 from src.backtest.single_stock import run_single_stock_backtest
 from src.backtest.transaction_costs import TransactionCostParams, transaction_cost_params_from_mapping
+from src.backtest.wfo import _fit_meta_model_for_fold
 from src.data_fetcher.db_manager import DuckDBManager
 from src.data_fetcher.stock_name_cache import resolve_stock_name_cache_path, resolve_stock_names
 from src.indicators import DKTrendParams, TrendMode
@@ -121,6 +122,18 @@ def main() -> int:
     parser.add_argument("--export-html", action="store_true")
     parser.add_argument("--permutation-test", action="store_true")
     parser.add_argument("--n-permutations", type=int, default=500)
+    parser.add_argument("--meta-label-mode", choices=["off", "hard", "scale"], help="Use full-sample meta-label model for this backtest run")
+    parser.add_argument("--meta-label-threshold", type=float, help="Skip BUY when p_win is below this threshold in hard mode")
+    parser.add_argument("--meta-label-min-samples", type=int, default=10, help="Minimum BUY samples needed to train the meta-label model")
+    parser.add_argument("--require-above-ma120", action="store_true", help="Only allow BUY signals when close is above MA120")
+    parser.add_argument("--require-positive-rs60", action="store_true", help="Only allow BUY signals that outperform the benchmark over 60 bars")
+    parser.add_argument("--require-weekly-bullish", action="store_true", help="Only allow BUY signals when weekly trend is bullish")
+    parser.add_argument("--weekly-ma-fast", type=int, help="Fast weekly MA window for --require-weekly-bullish")
+    parser.add_argument("--weekly-ma-slow", type=int, help="Slow weekly MA window for --require-weekly-bullish")
+    parser.add_argument("--volatility-target-ann", type=float, help="Annualized volatility target for EWMA position scaling")
+    parser.add_argument("--volatility-lookback", type=int, help="EWMA volatility span in trading bars")
+    parser.add_argument("--volatility-high-vol-multiple", type=float, help="High-volatility trigger as a multiple of expanding median EWMA vol")
+    parser.add_argument("--volatility-high-vol-scale", type=float, help="Maximum position multiplier when high-volatility trigger fires")
     parser.add_argument("--config", help="Config file path")
     parser.add_argument("--duckdb-path", help="Override DuckDB path, e.g. /path/to/market.duckdb")
     parser.add_argument("--stock-name-cache", help="Override stock name CSV path")
@@ -147,6 +160,28 @@ def main() -> int:
     selected_mode = args.mode or ("macd_cross" if use_consensus else configured_mode)
     modes = [m.value for m in TrendMode] if args.compare_modes else [selected_mode]
     base_kwargs = _bt_kwargs(cfg, index_ohlcv=index_df)
+    if args.meta_label_mode is not None:
+        base_kwargs["meta_label_mode"] = args.meta_label_mode
+    if args.meta_label_threshold is not None:
+        base_kwargs["meta_label_threshold"] = args.meta_label_threshold
+    if args.require_above_ma120:
+        base_kwargs["require_above_ma120"] = True
+    if args.require_positive_rs60:
+        base_kwargs["require_positive_rs60"] = True
+    if args.require_weekly_bullish:
+        base_kwargs["require_weekly_bullish"] = True
+    if args.weekly_ma_fast is not None:
+        base_kwargs["weekly_ma_fast"] = args.weekly_ma_fast
+    if args.weekly_ma_slow is not None:
+        base_kwargs["weekly_ma_slow"] = args.weekly_ma_slow
+    if args.volatility_target_ann is not None:
+        base_kwargs["volatility_target_ann"] = args.volatility_target_ann
+    if args.volatility_lookback is not None:
+        base_kwargs["volatility_lookback"] = args.volatility_lookback
+    if args.volatility_high_vol_multiple is not None:
+        base_kwargs["volatility_high_vol_multiple"] = args.volatility_high_vol_multiple
+    if args.volatility_high_vol_scale is not None:
+        base_kwargs["volatility_high_vol_scale"] = args.volatility_high_vol_scale
     if use_consensus:
         base_kwargs["consensus_n_agree"] = int((cfg.get("trend_signal", {}) or {}).get("consensus_n_agree", 2))
     else:
@@ -174,6 +209,13 @@ def main() -> int:
     for mode in modes:
         kwargs = dict(base_kwargs)
         kwargs["stock_name"] = stock_name
+        if str(kwargs.get("meta_label_mode", "off")).lower() != "off":
+            kwargs["meta_model"] = _fit_meta_model_for_fold(
+                df,
+                _params(cfg, mode),
+                kwargs,
+                min_samples=int(args.meta_label_min_samples),
+            )
         res = run_single_stock_backtest(
             symbol,
             df,

@@ -13,6 +13,8 @@ from src.models.meta_label import (
     build_training_samples,
     run_meta_label_wfo,
 )
+from src.backtest.single_stock import run_single_stock_backtest
+from src.indicators import DKTrendParams, TrendMode
 
 
 def _flat_df(closes: list[float], start: str = "2024-01-01") -> pd.DataFrame:
@@ -27,6 +29,27 @@ def _flat_df(closes: list[float], start: str = "2024-01-01") -> pd.DataFrame:
             "volume": [100.0] * n,
         }
     )
+
+
+def _trend_override(df: pd.DataFrame, buy_idx: int, sell_idx: int | None = None) -> pd.DataFrame:
+    trend = df.copy()
+    trend["dk_signal"] = ""
+    trend["dk_color"] = "green"
+    trend["dk_run_len"] = 1
+    trend.loc[buy_idx, "dk_signal"] = "buy"
+    trend.loc[buy_idx:, "dk_color"] = "red"
+    if sell_idx is not None:
+        trend.loc[sell_idx, "dk_signal"] = "sell"
+        trend.loc[sell_idx:, "dk_color"] = "green"
+    return trend
+
+
+class _ConstantMetaModel:
+    def __init__(self, p_win: float):
+        self.p_win = p_win
+
+    def predict_proba(self, X):
+        return np.full(len(X), self.p_win, dtype=np.float64)
 
 
 class TestSigmoid:
@@ -86,6 +109,32 @@ class TestBuildSignalFeatures:
         feats = build_signal_features(df)
         assert "rs_60" in feats.columns
 
+    def test_phase11_features_present_and_bounded(self):
+        n = 320
+        closes = [100.0 + i * 0.15 + 2.0 * np.sin(i / 8.0) for i in range(n)]
+        df = _flat_df(closes)
+        df["volume"] = [1000.0 + (i % 20) * 15.0 for i in range(n)]
+        df["turnover_rate"] = [1.0 + (i % 60) / 60.0 for i in range(n)]
+        index_df = _flat_df([100.0 + i * 0.08 for i in range(n)])
+
+        feats = build_signal_features(df, index_ohlcv=index_df)
+        expected = {
+            "pos_52w",
+            "pv_diverge",
+            "trend_consistency_20",
+            "macd_hist_dir",
+            "turnover_rank_60",
+            "beta_120",
+            "close_accel_10",
+            "vol_price_corr_20",
+        }
+        assert expected <= set(FEATURE_COLUMNS)
+        assert expected <= set(feats.columns)
+        assert feats["pos_52w"].dropna().between(0.0, 1.0).all()
+        assert feats["trend_consistency_20"].dropna().between(0.0, 1.0).all()
+        assert feats["turnover_rank_60"].dropna().between(0.0, 1.0).all()
+        assert np.isfinite(feats["beta_120"].iloc[-1])
+
 
 class TestBuildTrainingSamples:
     def test_profit_label_binary(self):
@@ -126,3 +175,33 @@ class TestMetaLabelWFO:
         assert len(results) >= 1
         for r in results:
             assert isinstance(r, MetaLabelResult)
+
+
+class TestMetaLabelBacktestIntegration:
+    def test_hard_filter_skips_low_p_win_buy(self):
+        df = _flat_df([10.0, 10.0, 10.5, 11.0, 11.2, 11.0, 10.8, 10.7])
+        trend = _trend_override(df, buy_idx=1, sell_idx=5)
+        params = DKTrendParams(mode=TrendMode.MACD_CROSS)
+
+        baseline = run_single_stock_backtest(
+            "600000",
+            df,
+            params,
+            cost_bps=0,
+            initial_capital=10000,
+            trend_override=trend,
+        )
+        filtered = run_single_stock_backtest(
+            "600000",
+            df,
+            params,
+            cost_bps=0,
+            initial_capital=10000,
+            trend_override=trend,
+            meta_model=_ConstantMetaModel(0.40),
+            meta_label_mode="hard",
+            meta_label_threshold=0.55,
+        )
+
+        assert baseline.n_trades == 1
+        assert filtered.n_trades == 0

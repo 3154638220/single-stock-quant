@@ -9,6 +9,9 @@ import pandas as pd
 
 from src.backtest.engine import BacktestConfig, BacktestResult, run_backtest
 from src.backtest.transaction_costs import TransactionCostParams
+from src.backtest.wfo import _fit_meta_model_for_fold
+from src.indicators import DKTrendParams
+from src.models.meta_label import FEATURE_COLUMNS, build_signal_features
 
 from .allocator import allocate_top_n, apply_constraints
 from .signal_ranker import rank_signals
@@ -28,6 +31,10 @@ def run_portfolio_backtest(
     industry_map: dict[str, str] | None = None,
     cost_params: TransactionCostParams | None = None,
     initial_capital: float = 100_000.0,
+    meta_label_scores: pd.DataFrame | None = None,
+    min_meta_score: float | None = None,
+    require_above_ma120: bool = False,
+    require_positive_rs60: bool = False,
 ) -> dict[str, Any]:
     """Run a portfolio-level backtest on the watchlist cross-section.
 
@@ -53,7 +60,16 @@ def run_portfolio_backtest(
     volume_wide = df.pivot(index=date_col, columns=sym_col, values="volume").sort_index().astype(np.float64)
 
     # Rank signals
-    scores = rank_signals(df, index_ohlcv=index_ohlcv, date_col=date_col, sym_col=sym_col)
+    scores = rank_signals(
+        df,
+        index_ohlcv=index_ohlcv,
+        meta_label_scores=meta_label_scores,
+        date_col=date_col,
+        sym_col=sym_col,
+        require_above_ma120=require_above_ma120,
+        require_positive_rs60=require_positive_rs60,
+        min_meta_score=min_meta_score,
+    )
 
     # Allocate
     weights = allocate_top_n(
@@ -113,6 +129,64 @@ def run_portfolio_backtest(
         "backtest": bt_result,
         "summary": _portfolio_summary(bt_result, weights_aligned),
     }
+
+
+def build_meta_label_score_panel(
+    daily_long: pd.DataFrame,
+    params: DKTrendParams,
+    *,
+    index_ohlcv: pd.DataFrame | None = None,
+    bt_kwargs: dict[str, Any] | None = None,
+    date_col: str = "trade_date",
+    sym_col: str = "symbol",
+    min_train_days: int = 504,
+    refit_every: int = 63,
+    min_samples: int = 10,
+    neutral_score: float = 0.50,
+) -> pd.DataFrame:
+    """Build leakage-aware expanding-window p_win scores for portfolio ranking.
+
+    Each symbol's model is trained only on rows before the prediction block.
+    Dates without enough training signal history receive ``neutral_score``.
+    """
+    df = daily_long.copy()
+    df[date_col] = pd.to_datetime(df[date_col]).dt.normalize()
+    df[sym_col] = df[sym_col].astype(str).str.zfill(6)
+    dates = pd.Index(sorted(df[date_col].unique()), name=date_col)
+    symbols = sorted(df[sym_col].unique())
+    scores = pd.DataFrame(float(neutral_score), index=dates, columns=symbols)
+    kwargs = dict(bt_kwargs or {})
+    if index_ohlcv is not None:
+        kwargs.setdefault("index_ohlcv", index_ohlcv)
+
+    for sym in symbols:
+        sdf = df[df[sym_col] == sym].sort_values(date_col).reset_index(drop=True)
+        if len(sdf) <= min_train_days:
+            continue
+        features = build_signal_features(sdf, index_ohlcv=index_ohlcv).reset_index(drop=True)
+        trade_dates = pd.to_datetime(sdf[date_col]).dt.normalize().reset_index(drop=True)
+        for start in range(int(min_train_days), len(sdf), int(refit_every)):
+            end = min(start + int(refit_every), len(sdf))
+            model = _fit_meta_model_for_fold(
+                sdf.iloc[:start],
+                params,
+                kwargs,
+                min_samples=int(min_samples),
+            )
+            if model is None:
+                continue
+            block = features.iloc[start:end]
+            X = block.reindex(columns=FEATURE_COLUMNS).to_numpy(dtype=np.float64)
+            X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+            raw = np.asarray(model.predict_proba(X), dtype=np.float64)
+            if raw.ndim == 2:
+                p_win = raw[:, 1] if raw.shape[1] > 1 else raw[:, 0]
+            else:
+                p_win = raw.reshape(-1)
+            pred_dates = trade_dates.iloc[start:end]
+            scores.loc[pred_dates.to_numpy(), sym] = np.clip(p_win, 0.0, 1.0)
+
+    return scores
 
 
 def _portfolio_summary(

@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from src.backtest.single_stock import run_single_stock_backtest
+from src.backtest.single_stock import _ewma_volatility, run_single_stock_backtest
 from src.indicators import DKTrendParams, TrendMode
 
 
@@ -139,6 +139,47 @@ class TestRiskSizing:
             stop_loss_pct=0.01, risk_per_trade_pct=0.10, position_size_cap=0.3,
         )
         assert res.avg_position_fraction <= 0.31
+
+    def test_position_cap_applies_without_stop_sizing(self):
+        closes = [10] * 12 + [11, 12, 13, 14]
+        df = _flat_df(closes)
+        res = run_single_stock_backtest(
+            "600000", df,
+            DKTrendParams(mode=TrendMode.MACD_CROSS, macd_fast=3, macd_slow=6, macd_signal=3),
+            cost_bps=0, initial_capital=10000,
+            position_size_cap=0.4,
+        )
+        assert res.avg_position_fraction <= 0.41
+
+    def test_atr_risk_sizing_limits_position_without_fixed_stop(self):
+        n = 40
+        closes = [10 + (i % 2) for i in range(n)]
+        df = _ohlc_df(
+            opens=closes,
+            highs=[c + 1.0 for c in closes],
+            lows=[c - 1.0 for c in closes],
+            closes=closes,
+        )
+        res = run_single_stock_backtest(
+            "600000",
+            df,
+            DKTrendParams(mode=TrendMode.MACD_CROSS, macd_fast=3, macd_slow=6, macd_signal=3),
+            cost_bps=0,
+            initial_capital=10000,
+            atr_stop_multiplier=2.0,
+            atr_stop_period=5,
+            risk_per_trade_pct=0.02,
+        )
+        assert res.avg_position_fraction < 1.0
+
+
+class TestEWMAVolatility:
+    def test_ewma_volatility_reacts_to_recent_spike(self):
+        returns = pd.Series([0.001] * 30 + [0.08, -0.07, 0.06])
+
+        vol = _ewma_volatility(returns, span=10)
+
+        assert vol.iloc[-1] > vol.iloc[20]
 
 
 # ── Stop-loss smart re-entry ───────────────────────────────────
