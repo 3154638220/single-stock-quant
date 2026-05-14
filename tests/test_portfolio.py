@@ -188,6 +188,113 @@ class TestSignalRanker:
         assert np.isclose(guarded["000002"].iloc[-1], baseline["000002"].iloc[-1] * 0.25)
         assert np.isclose(guarded["000001"].iloc[-1], baseline["000001"].iloc[-1])
 
+    def test_rolling_greylist_profile_includes_params(self):
+        from src.portfolio.signal_ranker import _ranking_profile_weights
+        w = _ranking_profile_weights("dk_rolling_greylist")
+        assert w["rolling_greylist_lookback"] == 126
+        assert w["rolling_greylist_horizon"] == 5
+        assert w["rolling_greylist_threshold"] == -0.01
+        assert w["rolling_greylist_scale"] == 0.0
+        assert w["rolling_greylist_min_samples"] == 5
+        assert w["require_dk_red"] is True
+
+    def test_rolling_greylist_positive_returns_do_not_trigger(self):
+        symbols = ["000001", "000002", "000003"]
+        n_days = 200
+        rows = []
+        for s in symbols:
+            base = 50.0 if s == "000002" else 30.0
+            r = np.random.randn(n_days) * 0.02
+            closes = base * np.cumprod(1 + r)
+            for i, c in enumerate(closes):
+                rows.append({
+                    "trade_date": pd.Timestamp("2024-01-01") + pd.Timedelta(days=i),
+                    "symbol": s,
+                    "open": c * 0.99,
+                    "high": c * 1.02,
+                    "low": c * 0.98,
+                    "close": c,
+                    "volume": 2e7,
+                })
+        df = pd.DataFrame(rows)
+
+        scores = rank_signals(
+            df,
+            rolling_greylist_lookback=126,
+            rolling_greylist_horizon=5,
+            rolling_greylist_threshold=-0.01,
+            rolling_greylist_scale=0.0,
+            rolling_greylist_min_samples=5,
+        )
+        assert not scores.isna().all(axis=None)
+
+    def test_rolling_greylist_suppresses_negative_symbol(self):
+        symbols = ["000001", "000002"]
+        n_days = 200
+        rows = []
+        for s in symbols:
+            if s == "000002":
+                r = np.linspace(0, -0.3, n_days)
+            else:
+                r = np.random.randn(n_days) * 0.02
+            base = 10.0
+            closes = base * np.cumprod(1 + r)
+            for i, c in enumerate(closes):
+                rows.append({
+                    "trade_date": pd.Timestamp("2024-01-01") + pd.Timedelta(days=i),
+                    "symbol": s,
+                    "open": c * 0.99,
+                    "high": c * 1.02,
+                    "low": c * 0.98,
+                    "close": c,
+                    "volume": 2e7,
+                })
+        df = pd.DataFrame(rows)
+
+        scores = rank_signals(
+            df,
+            rolling_greylist_lookback=126,
+            rolling_greylist_horizon=5,
+            rolling_greylist_threshold=-0.01,
+            rolling_greylist_scale=0.0,
+            rolling_greylist_min_samples=5,
+        )
+        assert scores["000001"].sum() > 0
+        recent = scores.iloc[-20:]
+        assert (recent["000002"] == 0.0).all(), "consistently negative symbol should be greylisted in recent period"
+
+    def test_rolling_greylist_scale_mode_reduces_not_zeroes(self):
+        symbols = ["000001"]
+        n_days = 200
+        rows = []
+        r = np.linspace(0, -0.15, n_days)
+        base = 10.0
+        closes = base * np.cumprod(1 + r)
+        for i, c in enumerate(closes):
+            rows.append({
+                "trade_date": pd.Timestamp("2024-01-01") + pd.Timedelta(days=i),
+                "symbol": "000001",
+                "open": c * 0.99,
+                "high": c * 1.02,
+                "low": c * 0.98,
+                "close": c,
+                "volume": 2e7,
+            })
+        df = pd.DataFrame(rows)
+
+        baseline = rank_signals(df)
+        scaled = rank_signals(
+            df,
+            rolling_greylist_lookback=126,
+            rolling_greylist_horizon=5,
+            rolling_greylist_threshold=-0.01,
+            rolling_greylist_scale=0.50,
+            rolling_greylist_min_samples=5,
+        )
+        recent_base = baseline["000001"].iloc[-20:]
+        recent_scaled = scaled["000001"].iloc[-20:]
+        assert (recent_scaled <= recent_base).all()
+
 
 class TestAllocator:
     def test_allocate_top_n_output_shape(self):

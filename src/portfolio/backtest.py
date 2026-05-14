@@ -40,6 +40,11 @@ def run_portfolio_backtest(
     exclude_symbols: list[str] | tuple[str, ...] | set[str] | None = None,
     greylist_symbols: list[str] | tuple[str, ...] | set[str] | None = None,
     greylist_score_scale: float = 0.50,
+    rolling_greylist_lookback: int = 0,
+    rolling_greylist_horizon: int = 5,
+    rolling_greylist_threshold: float = -0.01,
+    rolling_greylist_scale: float = 0.0,
+    rolling_greylist_min_samples: int = 5,
 ) -> dict[str, Any]:
     """Run a portfolio-level backtest on the watchlist cross-section.
 
@@ -79,6 +84,11 @@ def run_portfolio_backtest(
         exclude_symbols=exclude_symbols,
         greylist_symbols=greylist_symbols,
         greylist_score_scale=greylist_score_scale,
+        rolling_greylist_lookback=rolling_greylist_lookback,
+        rolling_greylist_horizon=rolling_greylist_horizon,
+        rolling_greylist_threshold=rolling_greylist_threshold,
+        rolling_greylist_scale=rolling_greylist_scale,
+        rolling_greylist_min_samples=rolling_greylist_min_samples,
     )
 
     # Allocate

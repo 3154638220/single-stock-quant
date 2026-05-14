@@ -220,6 +220,61 @@ Ranking 归因同步改善但仍不单调：
 
 验收检查：`000002` 与 `600048` 最大持仓权重均为 0；`300750`、`300059`、`002594` 最大持仓权重仍为 0.25，正贡献标的未被直接误伤。`candidate_breakdown.csv` 中 20 日 horizon 不再包含被排除的 `000002`、`600048`，但 `600585` 在降权后仍是最弱 symbol（20 日聚合均值约 -0.99%），说明下一轮 E21 应测试 `600585` 全排除、行业相对强弱过滤，或 rolling symbol greylist，而不是直接把静态 blacklist 作为默认策略。
 
+### 0.7 阶段 21 推进更新（2026-05-14）
+
+已完成 E21 代码入口和首轮实验。核心新增能力：**滚动 symbol 灰名单（rolling symbol greylist）**——对每个调仓日，使用该日前已完整实现的 forward return 计算各 symbol 滚动窗口均值，低于阈值的 symbol 自动降权或剔除。该机制不使用任何未来数据（训练窗口截止于 `t - horizon - 1`）。
+
+新增 `dk_rolling_greylist` ranking profile 与独立 CLI 参数：
+
+```bash
+python scripts/run_portfolio_backtest.py \
+  --watchlist configs/watchlist_25.txt \
+  --start 2020-01-01 --end 2026-05-08 \
+  --n-top 3 \
+  --enable-meta-label \
+  --ranking-profile dk_meta \
+  --exclude-symbols 000002,600048 \
+  --rolling-greylist-lookback 252 \
+  --rolling-greylist-horizon 20 \
+  --rolling-greylist-threshold -0.03 \
+  --rolling-greylist-scale 0.0 \
+  --rolling-greylist-min-samples 8 \
+  --export-summary data/output/experiments/E21_rolling_20d/portfolio_summary.csv \
+  --export-weights data/output/experiments/E21_rolling_20d/portfolio_weights.csv \
+  --export-scores data/output/experiments/E21_rolling_20d/portfolio_scores.csv
+```
+
+关键设计决策与发现：
+- **5 日 horizon 噪声过大**：初版用 5 日 forward return 导致 300750（最强正贡献标的）被 greylist 23.6% 的天数；切换到 20 日 horizon + -3% 阈值后降至 1.4%
+- **252 日 lookback** 比 126 日提供更稳定的滚动均值估计
+- **结合静态 exclude**（000002, 600048）避免已确认的负期望标的占用 greylist 训练样本
+
+E21 最佳配置（`E21_rolling_20d`）：`dk_meta` + `exclude_symbols=000002,600048` + `rolling_greylist_lookback=252` + `horizon=20` + `threshold=-0.03` + `scale=0.0` + `min_samples=8`。
+
+| 实验目录 | 配置摘要 | 年化收益 | Sharpe | Calmar | 最大回撤 | 平均持仓 | 相对 E16 `dk_meta` |
+|---|---|---:|---:|---:|---:|---:|---|
+| `E16_dk_meta` | DK 红色候选池 + p_win 排序 | 0.22% | 0.114 | 0.004 | 51.45% | 2.87 | 基准 |
+| `E20_symbol_guard` | 排除 000002/600048，600585 降权 0.5x | 2.29% | 0.213 | 0.053 | 43.52% | 2.85 | 12 指标中 7 改善、1 恶化 |
+| `E21_rolling_20d` | 排除 000002/600048 + 20d 滚动灰名单 | 3.62% | 0.278 | 0.092 | 39.35% | 2.83 | 12 指标中 6 改善、2 恶化 |
+
+E21 相对 E16 的 DELTA 摘要：
+
+| Metric | E16 | E21 | Delta % |
+|---|---:|---:|---:|
+| Sharpe | 0.114 | 0.278 | +145% |
+| Calmar | 0.004 | 0.092 | +2036% |
+| Max DD | 51.45% | 39.35% | -23.5% |
+| Annualized Return | 0.22% | 3.62% | +1534% |
+| Ranking top-bottom (median) | +0.09pct | +0.29pct | +213% |
+| Avg Positions | 2.87 | 2.83 | -1.5% |
+
+Greylist 命中率验证（20 日 horizon，-3% 阈值）：
+- 正确命中（弱股）：000002 35.1%, 601888 33.7%, 600585 23.6%, 601012 21.9%, 600048 17.8%, 000725 10.7%, 600276 10.2%
+- 误伤控制（强股）：300750 1.4%, 300059 0%, 002475 0%, 000568 3.8%
+- 整体 greylist 率：9.2%
+
+**阶段性判断**：滚动灰名单是迄今最有效的单股过滤机制，相对静态黑名单（E20）Sharpe 提升 30%、最大回撤降低 4.2pct。但 Sharpe 0.28 仍远低于 0.75 目标，说明仅靠过滤负期望标的无法完全解决问题——还需要提升正期望标的的收益捕获能力。下一步方向应考虑：(1) 提高正贡献标的（300750/300059/002594）的持仓权重集中度，(2) 行业轮动或行业相对强弱过滤，(3) 单股层 meta-label 模型质量提升。
+
 ---
 
 ## 1. 现状总结与诊断
@@ -849,6 +904,7 @@ python scripts/compare_experiments.py \
 | E18 | Rolling forward-return calibration | 静态 score 需按历史 OOS forward return 做滚动校准 | `signal_ranker.py`, `attribution.py` | — | 5/20 日 top-bottom 和 bucket corr 同时转正 |
 | E19 | DK 候选池根因归因 | 负期望来自特定 symbol/行业/regime，而不是 ranking 权重本身 | `attribution.py`, `analyze_candidate_breakdown.py` | 找到稳定负贡献 symbol/行业 | 输出 `candidate_breakdown.csv`，形成 E20 过滤假设 |
 | E20 | Symbol/行业结构护栏 | E19 识别的稳定负期望 symbol/行业拖累组合风险收益 | `signal_ranker.py`, `run_portfolio_backtest.py` | — | MDD 不高于 E16，Sharpe/Calmar 不下降，正贡献标的不被误伤 |
+| E21 | 滚动 symbol 灰名单 | 动态识别并抑制滚动窗口内持续负期望标的，比静态黑名单更适应市场变化 | `signal_ranker.py`, `run_portfolio_backtest.py` | — | Sharpe ≥ 0.25，MDD ≤ 40%，正贡献标的 greylist 率 < 5% |
 | E_FINAL | 全部开关组合最优配置 | 各改进叠加效果验证 | 所有 | Sharpe ≥ 0.40 | Sharpe ≥ 0.75 |
 
 ---

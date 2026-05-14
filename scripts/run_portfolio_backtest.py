@@ -97,7 +97,7 @@ def main() -> int:
     parser.add_argument("--index-symbol", default=None, help="Benchmark/index symbol used for RS and regime features")
     parser.add_argument(
         "--ranking-profile",
-        choices=("balanced", "meta_priority", "dk_meta", "dk_fresh_meta", "dk_calibrated_meta"),
+        choices=("balanced", "meta_priority", "dk_meta", "dk_fresh_meta", "dk_calibrated_meta", "dk_rolling_greylist"),
         help="Cross-sectional ranking profile for portfolio ranking experiments",
     )
     parser.add_argument("--enable-meta-label", action="store_true", help="Build expanding-window p_win scores for ranking")
@@ -105,6 +105,11 @@ def main() -> int:
     parser.add_argument("--exclude-symbols", help="Comma-separated symbols or a text file to zero out in E20 experiments")
     parser.add_argument("--greylist-symbols", help="Comma-separated symbols or a text file to down-weight in E20 experiments")
     parser.add_argument("--greylist-score-scale", type=float, help="Score multiplier for greylisted symbols")
+    parser.add_argument("--rolling-greylist-lookback", type=int, default=0, help="E21 rolling greylist lookback days (0=disabled)")
+    parser.add_argument("--rolling-greylist-horizon", type=int, default=5, help="Forward-return horizon for rolling greylist")
+    parser.add_argument("--rolling-greylist-threshold", type=float, default=-0.01, help="Mean forward return below which symbol is greylisted")
+    parser.add_argument("--rolling-greylist-scale", type=float, default=0.0, help="Score multiplier when greylisted (0=exclude)")
+    parser.add_argument("--rolling-greylist-min-samples", type=int, default=5, help="Min observations to compute rolling greylist mean")
     parser.add_argument("--industry-map", help="CSV with symbol/code and industry/industry_name columns")
     parser.add_argument("--meta-label-min-train-days", type=int, default=504)
     parser.add_argument("--meta-label-refit-days", type=int, default=63)
@@ -193,6 +198,11 @@ def main() -> int:
         exclude_symbols=exclude_symbols,
         greylist_symbols=greylist_symbols,
         greylist_score_scale=greylist_score_scale,
+        rolling_greylist_lookback=args.rolling_greylist_lookback,
+        rolling_greylist_horizon=args.rolling_greylist_horizon,
+        rolling_greylist_threshold=args.rolling_greylist_threshold,
+        rolling_greylist_scale=args.rolling_greylist_scale,
+        rolling_greylist_min_samples=args.rolling_greylist_min_samples,
     )
 
     summary = result.get("summary", {})

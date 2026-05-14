@@ -83,6 +83,24 @@ _RANKING_PROFILES = {
         "calibration_min_observations": 100,
         "calibration_strength": 0.70,
     },
+    "dk_rolling_greylist": {
+        "meta": 0.65,
+        "trend": 0.07,
+        "rs": 0.06,
+        "ma": 0.06,
+        "momentum": 0.04,
+        "donchian": 0.05,
+        "volatility_penalty": 0.04,
+        "regime": 0.03,
+        "liquidity": 0.04,
+        "require_dk_red": True,
+        "max_dk_run_len": None,
+        "rolling_greylist_lookback": 126,
+        "rolling_greylist_horizon": 5,
+        "rolling_greylist_threshold": -0.01,
+        "rolling_greylist_scale": 0.0,
+        "rolling_greylist_min_samples": 5,
+    },
 }
 
 
@@ -105,22 +123,33 @@ def rank_signals(
     exclude_symbols: list[str] | tuple[str, ...] | set[str] | None = None,
     greylist_symbols: list[str] | tuple[str, ...] | set[str] | None = None,
     greylist_score_scale: float = 0.50,
+    rolling_greylist_lookback: int = 0,
+    rolling_greylist_horizon: int = 5,
+    rolling_greylist_threshold: float = -0.01,
+    rolling_greylist_scale: float = 0.0,
+    rolling_greylist_min_samples: int = 5,
 ) -> pd.DataFrame:
     """Produce a daily rank score for every (date, symbol) row.
 
     Returns a wide DataFrame (index=trade_date, columns=symbol) with scores
     in [0, 100].
 
-    ``ranking_profile`` controls the E16 cross-sectional experiment:
+    ``ranking_profile`` controls the cross-sectional experiment:
     ``balanced`` keeps the stage-10 weights, ``meta_priority`` makes p_win the
     dominant rank input, ``dk_meta`` requires a DK red trend state,
     ``dk_fresh_meta`` further excludes red trends older than 20 trading days,
-    and ``dk_calibrated_meta`` applies rolling forward-return bucket
-    calibration to the DK candidate pool.
+    ``dk_calibrated_meta`` applies rolling forward-return bucket calibration,
+    and ``dk_rolling_greylist`` adds point-in-time rolling symbol greylisting
+    on top of ``dk_meta``.
 
-    ``exclude_symbols`` and ``greylist_symbols`` are E20 structural guardrails
-    for testing symbol-level negative-expectancy diagnostics without hardcoding
-    a watchlist-specific rule into any ranking profile.
+    ``exclude_symbols`` and ``greylist_symbols`` are static structural
+    guardrails for symbol-level experiments.
+
+    ``rolling_greylist_*`` enables point-in-time dynamic greylisting: for each
+    date, symbols whose realized forward returns over the lookback window fall
+    below the threshold are suppressed (score zeroed or scaled). Only past
+    signals whose forward returns are fully observable by the current date are
+    used, avoiding look-ahead bias.
     """
     weights = _ranking_profile_weights(ranking_profile)
     df = daily_long.copy()
@@ -285,6 +314,29 @@ def rank_signals(
         if scaled_cols:
             score.loc[:, scaled_cols] *= scale
 
+    # ── E21 Rolling greylist: point-in-time dynamic symbol suppression ──
+    rl_lookback = max(int(rolling_greylist_lookback), int(weights.get("rolling_greylist_lookback", 0)))
+    if rl_lookback > 0:
+        rl_horizon = int(rolling_greylist_horizon) if rolling_greylist_horizon != 5 else int(weights.get("rolling_greylist_horizon", 5))
+        rl_threshold = float(rolling_greylist_threshold) if rolling_greylist_threshold != -0.01 else float(weights.get("rolling_greylist_threshold", -0.01))
+        rl_scale = float(rolling_greylist_scale) if rolling_greylist_scale != 0.0 else float(weights.get("rolling_greylist_scale", 0.0))
+        rl_min_samples = int(rolling_greylist_min_samples) if rolling_greylist_min_samples != 5 else int(weights.get("rolling_greylist_min_samples", 5))
+        greylist_mask = _compute_rolling_greylist_mask(
+            df,
+            score,
+            lookback=rl_lookback,
+            horizon=rl_horizon,
+            threshold=rl_threshold,
+            min_samples=rl_min_samples,
+            date_col=date_col,
+            sym_col=sym_col,
+        )
+        if rl_scale <= 0.0:
+            score = score.where(~greylist_mask, 0.0)
+        else:
+            discount = score * float(np.clip(rl_scale, 0.0, 1.0))
+            score = score.where(~greylist_mask, discount)
+
     return score.clip(lower=0.0, upper=100.0)
 
 
@@ -327,3 +379,72 @@ def _compute_dk_candidate_mask(
             candidate &= run_len.le(max_run)
         mask.loc[dates, code] = candidate.to_numpy()
     return mask
+
+
+def _compute_rolling_greylist_mask(
+    daily_long: pd.DataFrame,
+    scores: pd.DataFrame,
+    *,
+    lookback: int,
+    horizon: int,
+    threshold: float,
+    min_samples: int,
+    date_col: str,
+    sym_col: str,
+) -> pd.DataFrame:
+    """Point-in-time rolling greylist mask based on realized forward returns.
+
+    For each date *t*, only past signals whose *horizon*-day forward return
+    is fully observable by *t* are used: a signal on date *s* enters at
+    *open[s+1]* and its return is known once *open[s+horizon+1]* exists,
+    i.e. at date *s+horizon+1*.  Therefore the training window for date *t*
+    ends at *t - horizon - 1*.
+
+    Returns a boolean DataFrame (True = greylisted) aligned with *scores*.
+    """
+    h = max(int(horizon), 1)
+    lb = max(int(lookback), h + 2)
+    thresh = float(threshold)
+    min_obs = max(int(min_samples), 1)
+
+    df = daily_long.copy()
+    df[date_col] = pd.to_datetime(df[date_col]).dt.normalize()
+    df[sym_col] = df[sym_col].astype(str).str.zfill(6)
+    open_wide = df.pivot(index=date_col, columns=sym_col, values="open").sort_index().astype(np.float64)
+    open_wide = open_wide.reindex(index=scores.index, columns=scores.columns).astype(np.float64)
+
+    score_arr = scores.to_numpy(dtype=np.float64)
+    open_arr = open_wide.to_numpy(dtype=np.float64)
+    n_dates, n_syms = score_arr.shape
+
+    mask = np.zeros((n_dates, n_syms), dtype=bool)
+
+    for i in range(n_dates):
+        train_end = i - h - 1
+        train_start = max(0, i - h - lb)
+        if train_end < train_start or train_end < 0:
+            continue
+        n_train = train_end - train_start + 1
+        if n_train < min_obs:
+            continue
+
+        score_window = score_arr[train_start : train_end + 1, :]
+        # Forward return for signal at position j: open[j+h+1] / open[j+1] - 1
+        entry = open_arr[train_start + 1 : train_end + 2, :]
+        exit_price = open_arr[train_start + h + 1 : train_end + h + 2, :]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            fwd_ret = np.where(
+                (entry > 0) & (exit_price > 0),
+                exit_price / entry - 1.0,
+                np.nan,
+            )
+
+        active = (score_window > 0.0) & ~np.isnan(fwd_ret)
+        n_active = active.sum(axis=0)
+        with np.errstate(invalid="ignore"):
+            sum_ret = np.nansum(np.where(active, fwd_ret, 0.0), axis=0)
+            mean_ret = np.where(n_active >= min_obs, sum_ret / n_active, np.nan)
+
+        mask[i, :] = ~np.isnan(mean_ret) & (mean_ret < thresh)
+
+    return pd.DataFrame(mask, index=scores.index, columns=scores.columns)
