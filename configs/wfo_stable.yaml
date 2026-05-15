@@ -1,0 +1,22 @@
+# WFO: stable config — only optimize MACD params, fix exit params
+# Action 5 Solution A: reduces overfitting by keeping profit_lock params out of the grid
+#
+# Rationale: profit_lock_trigger=0.08 / profit_lock_trailing=0.04 were picked
+# from IS full-sample experiments. Putting them back in the WFO grid means
+# each fold re-optimizes them, compounding IS overfit.
+
+backtest:
+  stop_loss_pct: 0.08
+  time_stop_days: 30
+  time_stop_min_return: 0.03
+  profit_lock_trigger: 0.08   # fixed, not in grid
+  profit_lock_trailing: 0.04  # fixed, not in grid
+
+signal_filter:
+  volume_confirm: true
+
+wfo:
+  param_grid:
+    macd_fast: [10, 12, 14]
+    macd_signal: [8, 9, 10]
+  # 3^2 = 9 combinations (vs 81 in s_final_wfo)
