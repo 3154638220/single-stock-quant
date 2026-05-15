@@ -8,7 +8,7 @@ from enum import Enum
 import numpy as np
 import pandas as pd
 
-from .utils import ema
+from .utils import ema, ema_seeded
 
 
 class TrendMode(str, Enum):
@@ -16,6 +16,9 @@ class TrendMode(str, Enum):
     MA_CROSS = "ma_cross"
     BOLL_TREND = "boll_trend"
     DONCHIAN_BREAKOUT = "donchian_breakout"
+    LONG_MA_TREND = "long_ma_trend"
+    DUAL_MA_CROSS = "dual_ma_cross"
+    TREND_SCORE = "trend_score"
 
 
 @dataclass(frozen=True)
@@ -31,6 +34,20 @@ class DKTrendParams:
     min_run_len: int = 1
     donchian_entry_window: int = 20
     donchian_exit_window: int = 10
+    # Long MA trend params
+    trend_ma_period: int = 250
+    trend_ma_type: str = "ema"
+    slope_lookback: int = 10
+    require_positive_slope: bool = True
+    # Dual MA cross params
+    dual_ma_fast: int = 30
+    dual_ma_slow: int = 120
+    # Trend score params
+    trend_score_ma_long: int = 250
+    trend_score_ma_fast: int = 30
+    trend_score_ma_slow: int = 120
+    # Signal confirmation
+    min_breakout_days: int = 3
 
     @classmethod
     def from_mapping(cls, data: dict | None) -> "DKTrendParams":
@@ -48,6 +65,16 @@ class DKTrendParams:
             min_run_len=int(d.get("min_run_len", 1)),
             donchian_entry_window=int(d.get("donchian_entry_window", 20)),
             donchian_exit_window=int(d.get("donchian_exit_window", 10)),
+            trend_ma_period=int(d.get("trend_ma_period", 250)),
+            trend_ma_type=str(d.get("trend_ma_type", "ema")),
+            slope_lookback=int(d.get("slope_lookback", 10)),
+            require_positive_slope=bool(d.get("require_positive_slope", True)),
+            dual_ma_fast=int(d.get("dual_ma_fast", 30)),
+            dual_ma_slow=int(d.get("dual_ma_slow", 120)),
+            trend_score_ma_long=int(d.get("trend_score_ma_long", 250)),
+            trend_score_ma_fast=int(d.get("trend_score_ma_fast", 30)),
+            trend_score_ma_slow=int(d.get("trend_score_ma_slow", 120)),
+            min_breakout_days=int(d.get("min_breakout_days", 3)),
         )
 
 
@@ -90,7 +117,53 @@ def _indicator_value(df: pd.DataFrame, params: DKTrendParams) -> pd.Series:
     if mode == TrendMode.BOLL_TREND:
         middle = close.rolling(params.boll_window, min_periods=params.boll_window).mean()
         return close - middle
+    if mode == TrendMode.LONG_MA_TREND:
+        trend_line = _compute_ma(close, params.trend_ma_period, params.trend_ma_type)
+        slope = trend_line.diff(params.slope_lookback)
+        raw = close - trend_line
+        if params.require_positive_slope:
+            raw = raw.where(slope > 0, -raw.abs())
+        return raw
+    if mode == TrendMode.DUAL_MA_CROSS:
+        fast = _compute_ma(close, params.dual_ma_fast, params.trend_ma_type)
+        slow = _compute_ma(close, params.dual_ma_slow, params.trend_ma_type)
+        return fast - slow
+    if mode == TrendMode.TREND_SCORE:
+        return _trend_score(df, close, params)
     raise ValueError(f"unsupported trend mode: {params.mode}")
+
+
+def _compute_ma(series: pd.Series, period: int, ma_type: str) -> pd.Series:
+    if ma_type == "ema":
+        return ema_seeded(series, period)
+    if ma_type == "wma":
+        return series.rolling(period, min_periods=period).apply(
+            lambda x: ((x * (np.arange(len(x)) + 1)) / (np.arange(len(x)) + 1).sum()).sum()
+        )
+    if ma_type == "hull":
+        wma_half = _wma(series, period // 2)
+        wma_full = _wma(series, period)
+        hma_raw = 2 * wma_half - wma_full
+        return _wma(hma_raw, int(np.sqrt(period)))
+    return ema(series, period)
+
+
+def _wma(series: pd.Series, period: int) -> pd.Series:
+    p = max(1, int(period))
+    return series.rolling(p, min_periods=p).apply(
+        lambda x: ((x * (np.arange(len(x)) + 1)) / (np.arange(len(x)) + 1).sum()).sum(),
+        raw=True,
+    )
+
+
+def _trend_score(df: pd.DataFrame, close: pd.Series, params: DKTrendParams) -> pd.Series:
+    ma_long = _compute_ma(close, params.trend_score_ma_long, params.trend_ma_type)
+    ma_fast = _compute_ma(close, params.trend_score_ma_fast, params.trend_ma_type)
+    ma_slow = _compute_ma(close, params.trend_score_ma_slow, params.trend_ma_type)
+    cond_price_above_long = (close > ma_long).astype(float)
+    cond_fast_above_slow = (ma_fast > ma_slow).astype(float)
+    score = 0.5 * cond_price_above_long + 0.5 * cond_fast_above_slow
+    return (score - 0.5) * 2
 
 
 def _run_lengths(colors: pd.Series) -> pd.Series:
