@@ -1,0 +1,11 @@
+# SE2e: Combined exit — DK fade N=5 + Intrapos DD 15% + Time stop 30d + Profit lock 8%/4%
+backtest:
+  stop_loss_pct: 0.08
+  dk_fade_exit_n: 5
+  intrapos_dd_limit: 0.15
+  time_stop_days: 30
+  time_stop_min_return: 0.03
+  profit_lock_trigger: 0.08
+  profit_lock_trailing: 0.04
+signal_filter:
+  volume_confirm: true

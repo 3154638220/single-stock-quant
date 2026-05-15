@@ -1,0 +1,6 @@
+# SE2b: DK fade exit N=5
+backtest:
+  stop_loss_pct: 0.08
+  dk_fade_exit_n: 5
+signal_filter:
+  volume_confirm: true

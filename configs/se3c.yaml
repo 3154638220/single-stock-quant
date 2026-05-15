@@ -1,0 +1,7 @@
+# SE3c: Pullback entry (wait for down day within 3 days after DK buy signal)
+backtest:
+  stop_loss_pct: 0.08
+signal_filter:
+  volume_confirm: true
+  require_pullback_entry: true
+  pullback_wait_days: 3

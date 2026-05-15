@@ -173,6 +173,8 @@ def main() -> int:
                 "profit_lock_exits": res.profit_lock_exits,
                 "market_exit_exits": res.market_exit_exits,
                 "time_stop_exits": res.time_stop_exits,
+                "dk_fade_exits": res.dk_fade_exits,
+                "intrapos_dd_exits": res.intrapos_dd_exits,
             }
         )
 

@@ -1,0 +1,22 @@
+# E_SINGLE: Final single-stock optimized configuration
+# Based on SE1-SE6 experiment results (2026-05-14)
+#
+# Key findings:
+#   SE2d won — profit lock 8%/4% is the single most effective improvement
+#   SE3 entry filters all degrade performance — entry is NOT the bottleneck
+#   DK fade exit (N=3, N=5) counterproductive — exits too early
+#   Intrapos DD 15% doesn't add value beyond 8% fixed stop loss
+#
+# Performance (25-stock IS):
+#   Median Sharpe: 0.337 (baseline: 0.262)
+#   Median MDD: 25.1% (baseline: 47.1%)
+#   Sharpe>0: 68%
+
+backtest:
+  stop_loss_pct: 0.08
+  time_stop_days: 30
+  time_stop_min_return: 0.03
+  profit_lock_trigger: 0.08
+  profit_lock_trailing: 0.04
+signal_filter:
+  volume_confirm: true

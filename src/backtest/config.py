@@ -68,4 +68,16 @@ def build_bt_kwargs(cfg: dict[str, Any], *, index_ohlcv: pd.DataFrame | None = N
         "volatility_high_vol_scale": float(bt_cfg.get("volatility_high_vol_scale", 0.5)),
         # Phase 4.3 — drawdown throttle
         "drawdown_throttle_enabled": bool(bt_cfg.get("drawdown_throttle_enabled", False)),
+        # S2 — exit engine redesign
+        "dk_fade_exit_n": int(bt_cfg.get("dk_fade_exit_n", 0)),
+        "intrapos_dd_limit": float(bt_cfg.get("intrapos_dd_limit", 0.0)),
+        # S3 — entry quality gate
+        "require_price_breakout": bool(filt_cfg.get("require_price_breakout", False)),
+        "breakout_lookback": int(filt_cfg.get("breakout_lookback", 20)),
+        "require_adx_min": float(filt_cfg.get("require_adx_min", 0.0)),
+        "adx_period": int(filt_cfg.get("adx_period", 14)),
+        "require_pullback_entry": bool(filt_cfg.get("require_pullback_entry", False)),
+        "pullback_wait_days": int(filt_cfg.get("pullback_wait_days", 5)),
+        # S3.4 — index MA20 position scaling
+        "enable_index_ma20_filter": bool(risk_cfg.get("enable_index_ma20_filter", False)),
     }

@@ -1,0 +1,9 @@
+# SE5a: Best exit (SE2d) + mild entry conditions
+backtest:
+  stop_loss_pct: 0.08
+  time_stop_days: 30
+  time_stop_min_return: 0.03
+  profit_lock_trigger: 0.08
+  profit_lock_trailing: 0.04
+signal_filter:
+  volume_confirm: true

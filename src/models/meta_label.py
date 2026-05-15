@@ -18,6 +18,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from src.features.sector_features import compute_industry_rs_20
+
 
 @dataclass
 class MetaLabelResult:
@@ -89,7 +91,6 @@ def build_signal_features(
     ma60 = close.rolling(60, min_periods=60).mean()
     out["ma20_slope"] = (ma20 / ma20.shift(5) - 1.0) * 100
     out["ma60_slope"] = (ma60 / ma60.shift(5) - 1.0) * 100
-    out["close_above_ma20"] = (close > ma20).astype(float)
     out["close_above_ma60"] = (close > ma60).astype(float)
 
     # Volatility (ATR %)
@@ -104,6 +105,9 @@ def build_signal_features(
         .rolling(120, min_periods=60)
         .apply(lambda x: (x.iloc[-1] >= x).mean(), raw=False)
     )
+    # ATR expansion: short-term vol / long-term vol
+    atr60 = tr.rolling(60, min_periods=60).mean()
+    out["atr_expansion"] = (atr / atr60).fillna(1.0)
 
     # Volume ratio
     avg_vol_20 = volume.rolling(20, min_periods=20).mean()
@@ -137,18 +141,16 @@ def build_signal_features(
     else:
         out["rs_60"] = stock_ret_60
 
+    # S4 — industry/sector 20-day relative strength
+    out["industry_rs_20"] = compute_industry_rs_20(
+        df, index_ohlcv=index_ohlcv,
+    )
+
     # Phase 11 feature set: longer-horizon price location, price/volume
     # behaviour, trend consistency, acceleration, and benchmark sensitivity.
     high_252 = high.rolling(252, min_periods=120).max()
     low_252 = low.rolling(252, min_periods=120).min()
     out["pos_52w"] = (close - low_252) / (high_252 - low_252).replace(0.0, np.nan)
-
-    price_up_5 = close.pct_change(5, fill_method=None) > 0
-    vol_down_5 = volume < volume.shift(1)
-    out["pv_diverge"] = (price_up_5 & vol_down_5.rolling(5, min_periods=5).sum().ge(4)).astype(float)
-
-    ma5 = close.rolling(5, min_periods=5).mean()
-    out["trend_consistency_20"] = (close > ma5).astype(float).rolling(20, min_periods=10).mean()
 
     ema12 = close.ewm(span=12, adjust=False, min_periods=12).mean()
     ema26 = close.ewm(span=26, adjust=False, min_periods=26).mean()
@@ -193,11 +195,32 @@ def build_signal_features(
     out["volume_trend"] = (volume.rolling(5, min_periods=5).mean() /
                            volume.rolling(20, min_periods=20).mean()).fillna(1.0)
 
+    # Holding regime from index (bull=1, bear=-1, ranging=0)
+    if index_ohlcv is not None and not index_ohlcv.empty:
+        idx_close_reg = pd.to_numeric(index_ohlcv["close"], errors="coerce")
+        idx_ret60_reg = idx_close_reg.pct_change(60)
+        idx_dates_reg = pd.to_datetime(index_ohlcv["trade_date"]).dt.normalize()
+        regime_map = {}
+        for _j, _d in enumerate(idx_dates_reg):
+            _r = idx_ret60_reg.iloc[_j]
+            if pd.notna(_r):
+                regime_map[_d] = 1.0 if _r > 0.10 else (-1.0 if _r < -0.10 else 0.0)
+        stock_dates_reg = pd.to_datetime(df["trade_date"]).dt.normalize()
+        out["holding_regime"] = pd.Series(
+            [regime_map.get(d, 0.0) for d in stock_dates_reg],
+            index=df.index,
+            dtype=np.float64,
+        )
+    else:
+        out["holding_regime"] = 0.0
+
     # DK trend context (if provided)
     if dk_trend_state is not None:
         dk = dk_trend_state.copy()
         dk["trade_date"] = pd.to_datetime(dk["trade_date"]).dt.normalize()
         stock_dates = pd.to_datetime(df["trade_date"]).dt.normalize()
+
+        # Basic DK context
         dk_map = dict(zip(dk["trade_date"], dk["dk_run_len"]))
         out["dk_run_len"] = pd.Series(
             [dk_map.get(d, -1) for d in stock_dates],
@@ -210,9 +233,47 @@ def build_signal_features(
             index=df.index,
             dtype=np.float64,
         )
+
+        # S4 — new structural DK features
+        dk_value_map = dict(zip(dk["trade_date"], pd.to_numeric(dk.get("dk_value", pd.Series(0.0)), errors="coerce")))
+        dk_color_str_map = dict(zip(dk["trade_date"], dk.get("dk_color", pd.Series(""))))
+
+        # dk_value_pct_rank: percentile rank over 120 days
+        dk_vals_aligned = pd.Series(
+            [dk_value_map.get(d, 0.0) for d in stock_dates],
+            index=df.index,
+            dtype=np.float64,
+        )
+        out["dk_value_pct_rank"] = (
+            dk_vals_aligned.rolling(120, min_periods=60)
+            .apply(lambda x: (x.iloc[-1] >= x).mean(), raw=False)
+        )
+
+        # stock_trend_quality: |mean(dk_value)| / std(dk_value) over 20 days
+        dk_roll_mean = dk_vals_aligned.rolling(20, min_periods=10).mean()
+        dk_roll_std = dk_vals_aligned.rolling(20, min_periods=10).std()
+        out["stock_trend_quality"] = (
+            dk_roll_mean.abs() / dk_roll_std.replace(0.0, np.nan)
+        ).fillna(0.0)
+
+        # signal_recency: days since last DK color flip (red↔green)
+        colors_aligned = [
+            str(dk_color_str_map.get(d, "")).lower() for d in stock_dates
+        ]
+        recency = np.full(len(colors_aligned), -1.0, dtype=np.float64)
+        last_flip = -1
+        for _j in range(len(colors_aligned)):
+            if _j > 0 and colors_aligned[_j] != colors_aligned[_j - 1] and colors_aligned[_j] in ("red", "green"):
+                last_flip = _j
+            if last_flip >= 0:
+                recency[_j] = float(_j - last_flip)
+        out["signal_recency"] = recency
     else:
         out["dk_run_len"] = -1.0
         out["dk_is_red"] = 0.0
+        out["dk_value_pct_rank"] = 0.5
+        out["stock_trend_quality"] = 0.0
+        out["signal_recency"] = -1.0
 
     return out
 
@@ -220,17 +281,16 @@ def build_signal_features(
 FEATURE_COLUMNS = [
     "ma20_slope",
     "ma60_slope",
-    "close_above_ma20",
     "close_above_ma60",
     "atr_pct",
     "atr_pct_rank",
+    "atr_expansion",
     "volume_ratio_20",
     "donchian_20_breakout",
     "stock_ret_60",
     "rs_60",
+    "industry_rs_20",
     "pos_52w",
-    "pv_diverge",
-    "trend_consistency_20",
     "macd_hist_dir",
     "turnover_rank_60",
     "beta_120",
@@ -244,6 +304,10 @@ FEATURE_COLUMNS = [
     "volume_trend",
     "dk_run_len",
     "dk_is_red",
+    "stock_trend_quality",
+    "holding_regime",
+    "signal_recency",
+    "dk_value_pct_rank",
 ]
 
 
@@ -266,14 +330,24 @@ def build_training_samples(
         - ``"risk_reward"``: max forward 20d return > |min forward 10d return|
         - ``"profit_aware"``: forward return > 0 AND max drawdown during
           holding period < *max_drawdown_threshold*
+        - ``"label_v1"``: 10-day forward return > 0
+        - ``"label_v2"``: 10-day forward return > ATR(14)
+        - ``"label_v3"``: MFE/MAE > 2.0 (profit factor over 10 days)
+        - ``"label_v4"``: 10-day return > 0 AND 5-day max DD < 2 * ATR(14)
     max_drawdown_threshold:
-        Only used for ``label_type="profit_aware"``. A signal is labeled 1
-        only if the open-to-open path never drops more than this fraction
-        below the entry price AND ends with a positive forward return.
+        Used for ``"profit_aware"`` label type.
     """
     features_df = build_signal_features(ohlcv, index_ohlcv=index_ohlcv, dk_trend_state=dk_trend_state)
     close = pd.to_numeric(ohlcv["close"], errors="coerce")
     open_price = pd.to_numeric(ohlcv.get("open", close), errors="coerce")
+    # Pre-compute ATR(14) as a decimal fraction for new label types
+    high_s = pd.to_numeric(ohlcv["high"], errors="coerce")
+    low_s = pd.to_numeric(ohlcv["low"], errors="coerce")
+    prev_close_s = close.shift(1)
+    tr_s = pd.concat(
+        [high_s - low_s, (high_s - prev_close_s).abs(), (low_s - prev_close_s).abs()], axis=1
+    ).max(axis=1)
+    atr_decimal = (tr_s.rolling(14, min_periods=14).mean() / close).fillna(0.01)
 
     # Build date → index mapping
     trade_dates = pd.to_datetime(ohlcv["trade_date"]).dt.normalize()
@@ -317,12 +391,143 @@ def build_training_samples(
             fwd_ret = float(close.iloc[pos + forward_return_days] / close.iloc[pos] - 1.0)
             # Must: (a) end positive, (b) never drawdown beyond threshold
             label = 1.0 if (fwd_ret > 0 and max_dd > -max_drawdown_threshold) else 0.0
+        elif label_type == "label_v1":
+            fwd_ret = (close.iloc[pos + 10] / close.iloc[pos]) - 1.0 if pos + 10 < len(close) else -1.0
+            label = 1.0 if fwd_ret > 0 else 0.0
+        elif label_type == "label_v2":
+            atr14 = float(atr_decimal.iloc[pos]) if pos < len(atr_decimal) and np.isfinite(atr_decimal.iloc[pos]) else 0.01
+            if atr14 <= 0:
+                atr14 = 0.01
+            fwd_ret = (close.iloc[pos + 10] / close.iloc[pos]) - 1.0 if pos + 10 < len(close) else -1.0
+            label = 1.0 if fwd_ret > atr14 else 0.0
+        elif label_type == "label_v3":
+            fwd_prices = close.iloc[pos : min(pos + 11, len(close))]
+            if len(fwd_prices) < 2:
+                continue
+            fwd_rets = (fwd_prices / close.iloc[pos]) - 1.0
+            mfe = float(fwd_rets.max())
+            mae = float(fwd_rets.min())
+            label = 1.0 if (mae < 0 and mfe > 0 and abs(mfe / mae) > 2.0) else 0.0
+        elif label_type == "label_v4":
+            atr14 = float(atr_decimal.iloc[pos]) if pos < len(atr_decimal) and np.isfinite(atr_decimal.iloc[pos]) else 0.01
+            if atr14 <= 0:
+                atr14 = 0.01
+            fwd_ret = (close.iloc[pos + 10] / close.iloc[pos]) - 1.0 if pos + 10 < len(close) else -1.0
+            fwd_5 = close.iloc[pos : min(pos + 6, len(close))]
+            if len(fwd_5) < 2:
+                continue
+            fwd_5_rets = (fwd_5 / close.iloc[pos]) - 1.0
+            max_dd_5 = float(fwd_5_rets.min())
+            label = 1.0 if (fwd_ret > 0 and max_dd_5 > -2.0 * atr14) else 0.0
         else:
             raise ValueError(f"unknown label_type: {label_type}")
 
         X_rows.append([feat_row.get(c, 0.0) for c in FEATURE_COLUMNS])
         y_rows.append(label)
         valid_dates.append(sig_date)
+
+    X = np.array(X_rows, dtype=np.float64)
+    X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+    y = np.array(y_rows, dtype=np.float64)
+    return X, y, pd.DatetimeIndex(valid_dates)
+
+
+def build_daily_labels(
+    ohlcv: pd.DataFrame,
+    dk_trend: pd.DataFrame,
+    *,
+    index_ohlcv: pd.DataFrame | None = None,
+    forward_days: int = 10,
+    label_type: str = "label_v4",
+    dk_trend_state: pd.DataFrame | None = None,
+) -> tuple[np.ndarray, np.ndarray, pd.DatetimeIndex]:
+    """Build (X, y, dates) from ALL DK red days, not just signal days.
+
+    This expands training samples from ~50 (signal-level) to ~500+ (daily-level)
+    per stock, giving the meta-model enough data to learn meaningful patterns.
+
+    Only days with ``dk_color == "red"`` are included, since those are the days
+    the strategy would consider being in a position.
+
+    Parameters
+    ----------
+    forward_days:
+        Number of days forward for return calculation (default 10).
+    label_type:
+        Same label types as ``build_training_samples``. Default ``"label_v4"``:
+        10-day return > 0 AND 5-day max DD < 2 * ATR(14).
+    """
+    features_df = build_signal_features(ohlcv, index_ohlcv=index_ohlcv, dk_trend_state=dk_trend_state)
+    close = pd.to_numeric(ohlcv["close"], errors="coerce")
+    high_s = pd.to_numeric(ohlcv["high"], errors="coerce")
+    low_s = pd.to_numeric(ohlcv["low"], errors="coerce")
+    prev_close_s = close.shift(1)
+    tr_s = pd.concat(
+        [high_s - low_s, (high_s - prev_close_s).abs(), (low_s - prev_close_s).abs()], axis=1
+    ).max(axis=1)
+    atr_decimal = (tr_s.rolling(14, min_periods=14).mean() / close).fillna(0.01)
+
+    # Align dk_trend with ohlcv by date
+    trend_dates = pd.to_datetime(dk_trend["trade_date"]).dt.normalize()
+    ohlcv_dates = pd.to_datetime(ohlcv["trade_date"]).dt.normalize()
+    date_to_ohlcv_pos = {d.date(): i for i, d in enumerate(ohlcv_dates)}
+
+    X_rows = []
+    y_rows = []
+    valid_dates = []
+
+    for ti, trend_row in dk_trend.iterrows():
+        if str(trend_row.get("dk_color", "")) != "red":
+            continue
+        td = trend_dates[ti].date()
+        if td not in date_to_ohlcv_pos:
+            continue
+        pos = date_to_ohlcv_pos[td]
+        if pos >= len(close) - forward_days:
+            continue
+
+        feat_row = features_df.iloc[pos]
+        if feat_row[FEATURE_COLUMNS].isna().all():
+            continue
+
+        # Build label (mirrors build_training_samples logic)
+        if label_type == "profit":
+            fwd_ret = (close.iloc[pos + forward_days] / close.iloc[pos]) - 1.0
+            label = 1.0 if fwd_ret > 0 else 0.0
+        elif label_type == "label_v1":
+            fwd_ret = (close.iloc[pos + 10] / close.iloc[pos]) - 1.0 if pos + 10 < len(close) else -1.0
+            label = 1.0 if fwd_ret > 0 else 0.0
+        elif label_type == "label_v2":
+            atr14 = float(atr_decimal.iloc[pos]) if pos < len(atr_decimal) and np.isfinite(atr_decimal.iloc[pos]) else 0.01
+            if atr14 <= 0:
+                atr14 = 0.01
+            fwd_ret = (close.iloc[pos + 10] / close.iloc[pos]) - 1.0 if pos + 10 < len(close) else -1.0
+            label = 1.0 if fwd_ret > atr14 else 0.0
+        elif label_type == "label_v3":
+            fwd_prices = close.iloc[pos : min(pos + forward_days + 1, len(close))]
+            if len(fwd_prices) < 2:
+                continue
+            fwd_rets = (fwd_prices / close.iloc[pos]) - 1.0
+            mfe = float(fwd_rets.max())
+            mae = float(fwd_rets.min())
+            label = 1.0 if (mae < 0 and mfe > 0 and abs(mfe / mae) > 2.0) else 0.0
+        elif label_type == "label_v4":
+            atr14 = float(atr_decimal.iloc[pos]) if pos < len(atr_decimal) and np.isfinite(atr_decimal.iloc[pos]) else 0.01
+            if atr14 <= 0:
+                atr14 = 0.01
+            fwd_ret = (close.iloc[pos + 10] / close.iloc[pos]) - 1.0 if pos + 10 < len(close) else -1.0
+            fwd_5 = close.iloc[pos : min(pos + 6, len(close))]
+            if len(fwd_5) < 2:
+                continue
+            fwd_5_rets = (fwd_5 / close.iloc[pos]) - 1.0
+            max_dd_5 = float(fwd_5_rets.min())
+            label = 1.0 if (fwd_ret > 0 and max_dd_5 > -2.0 * atr14) else 0.0
+        else:
+            raise ValueError(f"unknown label_type: {label_type}")
+
+        X_rows.append([feat_row.get(c, 0.0) for c in FEATURE_COLUMNS])
+        y_rows.append(label)
+        valid_dates.append(pd.Timestamp(td))
 
     X = np.array(X_rows, dtype=np.float64)
     X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)

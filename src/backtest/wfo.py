@@ -26,6 +26,15 @@ DEFAULT_PARAM_GRID: dict[str, list] = {
     "stop_loss_pct": [0.05, 0.08, 0.10],
 }
 
+# S6 — focused parameter grid (3^4 = 81 combos, down from 324)
+# Prioritises exit quality over raw signal tuning.
+FOCUSED_PARAM_GRID: dict[str, list] = {
+    "macd_fast": [10, 12, 14],
+    "macd_signal": [8, 9, 10],
+    "profit_lock_trigger": [0.06, 0.08, 0.10],
+    "profit_lock_trailing": [0.03, 0.04, 0.06],
+}
+
 _BT_PARAM_KEYS = {
     "stop_loss_pct", "trailing_stop_pct", "atr_stop_multiplier", "atr_stop_period",
     "volume_confirm", "volume_lookback", "volume_ratio_min",
@@ -41,6 +50,11 @@ _BT_PARAM_KEYS = {
     "require_above_ma120", "require_positive_rs60",
     "require_weekly_bullish", "weekly_ma_fast", "weekly_ma_slow",
     "volatility_high_vol_multiple", "volatility_high_vol_scale",
+    "dk_fade_exit_n", "intrapos_dd_limit",
+    "require_price_breakout", "breakout_lookback",
+    "require_adx_min", "adx_period",
+    "require_pullback_entry", "pullback_wait_days",
+    "enable_index_ma20_filter",
 }
 
 # All kwargs that run_single_stock_backtest accepts (beyond cost_bps, cost_params, initial_capital).
@@ -62,6 +76,11 @@ _VALID_BT_KWARGS = {
     "require_above_ma120", "require_positive_rs60",
     "require_weekly_bullish", "weekly_ma_fast", "weekly_ma_slow",
     "volatility_high_vol_multiple", "volatility_high_vol_scale",
+    "dk_fade_exit_n", "intrapos_dd_limit",
+    "require_price_breakout", "breakout_lookback",
+    "require_adx_min", "adx_period",
+    "require_pullback_entry", "pullback_wait_days",
+    "enable_index_ma20_filter",
 }
 
 
@@ -89,34 +108,89 @@ def _composite_score(
     res,
     *,
     train_days: int = 504,
-    min_trades_per_year: int = 3,
-    max_drawdown_limit: float = 0.45,
-    w_sharpe: float = 0.45,
-    w_calmar: float = 0.25,
-    w_ann_ret: float = 0.15,
-    w_mdd: float = -0.10,
-    w_turnover: float = -0.05,
+    min_trades_per_year: int = 4,
+    max_trades_per_year: int = 24,
+    max_drawdown_limit: float = 0.40,
+    w_sharpe: float = 0.35,
+    w_calmar: float = 0.40,
+    w_dd_score: float = 0.25,
 ) -> float:
-    """Composite objective score with hard constraints.
+    """S6 stability-first composite objective score.
 
-    Returns ``-inf`` when any hard constraint is violated so the parameter set is
-    excluded from selection.
+    Returns ``-inf`` when any hard constraint is violated.
+    Hard constraints are stricter than before:
+      - 4-24 trades/year (too few = sparse, too many = noise-fitting)
+      - max drawdown <= 40%
+    Soft weights: Calmar (40%), Sharpe (35%), DD score (25%).
     """
     years = max(train_days / 252.0, 0.25)
+    n_per_year = res.n_trades / years
 
-    # Hard constraints
-    if res.n_trades / years < min_trades_per_year:
+    # Hard constraints (stricter)
+    if n_per_year < min_trades_per_year:
+        return -np.inf
+    if n_per_year > max_trades_per_year:
         return -np.inf
     if res.max_drawdown > max_drawdown_limit:
         return -np.inf
 
-    sharpe = res.sharpe_ratio if np.isfinite(res.sharpe_ratio) else -1.0
-    calmar = res.calmar_ratio if np.isfinite(res.calmar_ratio) else -1.0
-    ann_ret = res.annualized_return if np.isfinite(res.annualized_return) else -1.0
-    dd = res.max_drawdown if np.isfinite(res.max_drawdown) else 1.0
-    turnover = min(res.n_trades / years / 20.0, 1.0)
+    sharpe = np.clip(res.sharpe_ratio, -2.0, 3.0) if np.isfinite(res.sharpe_ratio) else -2.0
+    calmar = np.clip(res.calmar_ratio, -1.0, 2.0) if np.isfinite(res.calmar_ratio) else -1.0
+    dd_score = max(0.0, 1.0 - res.max_drawdown) if np.isfinite(res.max_drawdown) else 0.0
 
-    return w_sharpe * sharpe + w_calmar * calmar + w_ann_ret * ann_ret + w_mdd * dd + w_turnover * turnover
+    return w_sharpe * sharpe + w_calmar * calmar + w_dd_score * dd_score
+
+
+def bootstrap_sharpe_ci(
+    returns: np.ndarray | pd.Series,
+    n_boot: int = 1000,
+    ci_level: float = 0.95,
+    random_state: int = 42,
+) -> dict[str, float]:
+    """Bootstrap confidence interval for annualised Sharpe ratio.
+
+    Parameters
+    ----------
+    returns:
+        Daily strategy returns (can include NaN for days out of market).
+    n_boot:
+        Number of bootstrap resamples.
+    ci_level:
+        Confidence level (default 0.95 for 95% CI).
+
+    Returns
+    -------
+    dict with keys ``sharpe`` (point estimate), ``ci_lower``, ``ci_upper``,
+    ``positive_fraction`` (fraction of bootstrap Sharpes > 0).
+    """
+    rng = np.random.default_rng(random_state)
+    if isinstance(returns, pd.Series):
+        vals = returns.dropna().to_numpy(dtype=np.float64)
+    else:
+        vals = returns[np.isfinite(returns)]
+    n = len(vals)
+    if n < 10:
+        return {"sharpe": float("nan"), "ci_lower": float("nan"), "ci_upper": float("nan"), "positive_fraction": float("nan")}
+
+    point_sharpe = float(np.mean(vals) / np.std(vals) * np.sqrt(252)) if np.std(vals) > 0 else 0.0
+
+    boot_sharpes = np.empty(n_boot, dtype=np.float64)
+    for b in range(n_boot):
+        sample = rng.choice(vals, size=n, replace=True)
+        s = np.std(sample)
+        boot_sharpes[b] = float(np.mean(sample) / s * np.sqrt(252)) if s > 0 else 0.0
+
+    alpha = (1.0 - ci_level) / 2.0
+    ci_lower = float(np.percentile(boot_sharpes, 100.0 * alpha))
+    ci_upper = float(np.percentile(boot_sharpes, 100.0 * (1.0 - alpha)))
+    pos_frac = float(np.mean(boot_sharpes > 0))
+
+    return {
+        "sharpe": point_sharpe,
+        "ci_lower": ci_lower,
+        "ci_upper": ci_upper,
+        "positive_fraction": pos_frac,
+    }
 
 
 def _params_with(base: DKTrendParams, overrides: dict[str, Any], mode_value: str) -> tuple[DKTrendParams, dict[str, Any]]:
@@ -465,24 +539,61 @@ def _fit_meta_model_for_fold(
     l2_penalty: float = 0.1,
     label_type: str = "profit_aware",
     max_drawdown_threshold: float = 0.08,
-) -> LogisticMetaModel | None:
-    """Train a fold-local meta-label model, returning None when samples are weak."""
-    signal_dates = _buy_signal_dates(train_df, params, bt_kwargs)
-    if len(signal_dates) < min_samples:
-        return None
+    model_type: str = "logistic",
+    use_daily_samples: bool = False,
+):
+    """Train a fold-local meta-label model, returning None when samples are weak.
+
+    Parameters
+    ----------
+    model_type:
+        ``"logistic"`` for LogisticMetaModel or ``"gbm"`` for GBMMetaModel.
+    use_daily_samples:
+        If True, use all DK red days as training samples (daily-level).
+        If False, use only BUY signal days (signal-level, default).
+    """
     # Compute DK trend state for signal-context features
     dk_trend_state = _compute_dk_state(train_df, params, bt_kwargs)
-    X, y, _ = build_training_samples(
-        train_df,
-        signal_dates,
-        index_ohlcv=bt_kwargs.get("index_ohlcv"),
-        label_type=label_type,
-        max_drawdown_threshold=max_drawdown_threshold,
-        dk_trend_state=dk_trend_state,
-    )
+
+    if use_daily_samples:
+        from src.models.meta_label import build_daily_labels
+        trend_full = compute_dktrend(train_df, params).reset_index(drop=True)
+        X, y, _ = build_daily_labels(
+            train_df,
+            trend_full,
+            index_ohlcv=bt_kwargs.get("index_ohlcv"),
+            forward_days=10,
+            label_type=label_type,
+            dk_trend_state=dk_trend_state,
+        )
+    else:
+        signal_dates = _buy_signal_dates(train_df, params, bt_kwargs)
+        if len(signal_dates) < min_samples:
+            return None
+        X, y, _ = build_training_samples(
+            train_df,
+            signal_dates,
+            index_ohlcv=bt_kwargs.get("index_ohlcv"),
+            label_type=label_type,
+            max_drawdown_threshold=max_drawdown_threshold,
+            dk_trend_state=dk_trend_state,
+        )
+
     if len(X) < min_samples or len(np.unique(y)) < 2:
         return None
-    model = LogisticMetaModel(l2_penalty=l2_penalty)
+
+    if model_type == "gbm":
+        from src.models.meta_label_gbm import GBMMetaModel
+        model = GBMMetaModel(
+            n_estimators=100,
+            max_depth=2,
+            learning_rate=0.05,
+            subsample=0.8,
+            min_samples_leaf=max(3, min(5, len(X) // 10)),
+        )
+    else:
+        model = LogisticMetaModel(l2_penalty=l2_penalty)
+
     model.fit(X, y, feature_names=FEATURE_COLUMNS)
     return model
 
@@ -533,6 +644,9 @@ def run_walk_forward_optimization(
     meta_label_threshold: float = 0.50,
     meta_label_mode: str = "hard",
     meta_label_min_samples: int = 10,
+    meta_label_type: str = "profit_aware",
+    meta_model_type: str = "logistic",
+    meta_use_daily_samples: bool = False,
     stability_weighting: bool = False,
 ) -> dict[str, Any]:
     """Run rolling or expanding WFO and return a JSON-serializable report."""
@@ -608,6 +722,9 @@ def run_walk_forward_optimization(
                 selected,
                 bt_final,
                 min_samples=int(meta_label_min_samples),
+                label_type=str(meta_label_type),
+                model_type=str(meta_model_type),
+                use_daily_samples=bool(meta_use_daily_samples),
             )
             if enable_meta_label
             else None
@@ -669,6 +786,9 @@ def run_walk_forward_optimization(
             n_concurrent_strategies=len(combos),
         ).to_dict()
         aggregated.update({f"{k}_combined": v for k, v in combined.items()})
+        # S6.3 — Bootstrap CI on stitched OOS Sharpe
+        boot_ci = bootstrap_sharpe_ci(stitched.to_numpy(dtype=np.float64))
+        aggregated["sharpe_bootstrap_ci"] = boot_ci
 
     heatmaps = _build_heatmap_data(combos, all_is_scores, all_oos_sharpes if all_oos_sharpes else None)
 
@@ -720,6 +840,9 @@ def run_nested_walk_forward_optimization(
     meta_label_threshold: float = 0.50,
     meta_label_mode: str = "hard",
     meta_label_min_samples: int = 10,
+    meta_label_type: str = "profit_aware",
+    meta_model_type: str = "logistic",
+    meta_use_daily_samples: bool = False,
     stability_weighting: bool = True,
 ) -> dict[str, Any]:
     """Nested walk-forward optimisation.
@@ -782,6 +905,9 @@ def run_nested_walk_forward_optimization(
             meta_label_threshold=meta_label_threshold,
             meta_label_mode=meta_label_mode,
             meta_label_min_samples=meta_label_min_samples,
+            meta_label_type=str(meta_label_type),
+            meta_model_type=str(meta_model_type),
+            meta_use_daily_samples=bool(meta_use_daily_samples),
             stability_weighting=stability_weighting,
         )
 
@@ -821,6 +947,9 @@ def run_nested_walk_forward_optimization(
                 params,
                 bt_final,
                 min_samples=int(meta_label_min_samples),
+                label_type=str(meta_label_type),
+                model_type=str(meta_model_type),
+                use_daily_samples=bool(meta_use_daily_samples),
             )
             if enable_meta_label
             else None
@@ -881,6 +1010,9 @@ def run_nested_walk_forward_optimization(
             n_concurrent_strategies=len(combos),
         ).to_dict()
         aggregated.update(combined)
+        # S6.3 — Bootstrap CI on stitched OOS Sharpe
+        boot_ci = bootstrap_sharpe_ci(stitched.to_numpy(dtype=np.float64))
+        aggregated["sharpe_bootstrap_ci"] = boot_ci
 
     return {
         "symbol": code,

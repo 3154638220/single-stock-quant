@@ -1,0 +1,9 @@
+# SE3d: Breakout + ADX dual confirmation
+backtest:
+  stop_loss_pct: 0.08
+signal_filter:
+  volume_confirm: true
+  require_price_breakout: true
+  breakout_lookback: 20
+  require_adx_min: 22
+  adx_period: 14

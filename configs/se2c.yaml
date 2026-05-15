@@ -1,0 +1,6 @@
+# SE2c: Intra-position drawdown stop 15%
+backtest:
+  stop_loss_pct: 0.08
+  intrapos_dd_limit: 0.15
+signal_filter:
+  volume_confirm: true

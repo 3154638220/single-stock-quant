@@ -1,0 +1,9 @@
+# SE5a v2: Wider profit lock (10%/5%) + longer time stop (40d)
+backtest:
+  stop_loss_pct: 0.08
+  time_stop_days: 40
+  time_stop_min_return: 0.0
+  profit_lock_trigger: 0.10
+  profit_lock_trailing: 0.05
+signal_filter:
+  volume_confirm: true

@@ -120,18 +120,18 @@ class TestBuildSignalFeatures:
         feats = build_signal_features(df, index_ohlcv=index_df)
         expected = {
             "pos_52w",
-            "pv_diverge",
-            "trend_consistency_20",
             "macd_hist_dir",
             "turnover_rank_60",
             "beta_120",
             "close_accel_10",
             "vol_price_corr_20",
+            "atr_expansion",
+            "holding_regime",
+            "stock_trend_quality",
         }
         assert expected <= set(FEATURE_COLUMNS)
         assert expected <= set(feats.columns)
         assert feats["pos_52w"].dropna().between(0.0, 1.0).all()
-        assert feats["trend_consistency_20"].dropna().between(0.0, 1.0).all()
         assert feats["turnover_rank_60"].dropna().between(0.0, 1.0).all()
         assert np.isfinite(feats["beta_120"].iloc[-1])
 

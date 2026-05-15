@@ -1,0 +1,10 @@
+# SE5a v3: Profit lock 8%/6% + time stop 30d + DK fade N=5
+backtest:
+  stop_loss_pct: 0.08
+  time_stop_days: 30
+  time_stop_min_return: 0.03
+  profit_lock_trigger: 0.08
+  profit_lock_trailing: 0.06
+  dk_fade_exit_n: 5
+signal_filter:
+  volume_confirm: true

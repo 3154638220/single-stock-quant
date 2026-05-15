@@ -1,0 +1,7 @@
+# SE3a: Price breakout 20-day high + DK BUY
+backtest:
+  stop_loss_pct: 0.08
+signal_filter:
+  volume_confirm: true
+  require_price_breakout: true
+  breakout_lookback: 20

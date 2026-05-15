@@ -42,6 +42,11 @@ def main() -> int:
     parser.add_argument("--meta-label-mode", choices=["hard", "scale"], default="hard")
     parser.add_argument("--meta-label-threshold", type=float, default=0.50)
     parser.add_argument("--meta-label-min-samples", type=int, default=10)
+    parser.add_argument("--meta-label-type", default="profit_aware",
+                        choices=["profit", "profit_aware", "risk_reward", "label_v1", "label_v2", "label_v3", "label_v4"])
+    parser.add_argument("--meta-model-type", default="logistic", choices=["logistic", "gbm"])
+    parser.add_argument("--meta-use-daily-samples", action="store_true",
+                        help="Train meta-label on all DK red days (daily-level) instead of signal days only")
     parser.add_argument("--stability-weighting", action="store_true", help="Report cross-fold stable parameter selection; nested WFO uses it for inner selection")
     parser.add_argument("--require-above-ma120", action="store_true", help="Only allow BUY signals when close is above MA120")
     parser.add_argument("--require-positive-rs60", action="store_true", help="Only allow BUY signals that outperform the benchmark over 60 bars")
@@ -108,6 +113,9 @@ def main() -> int:
             meta_label_threshold=args.meta_label_threshold,
             meta_label_mode=args.meta_label_mode,
             meta_label_min_samples=args.meta_label_min_samples,
+            meta_label_type=args.meta_label_type,
+            meta_model_type=args.meta_model_type,
+            meta_use_daily_samples=args.meta_use_daily_samples,
             stability_weighting=args.stability_weighting,
         )
 
@@ -157,6 +165,9 @@ def main() -> int:
             meta_label_threshold=args.meta_label_threshold,
             meta_label_mode=args.meta_label_mode,
             meta_label_min_samples=args.meta_label_min_samples,
+            meta_label_type=args.meta_label_type,
+            meta_model_type=args.meta_model_type,
+            meta_use_daily_samples=args.meta_use_daily_samples,
             stability_weighting=args.stability_weighting,
         )
 

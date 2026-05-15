@@ -30,7 +30,7 @@ def test_feature_importance_stability_across_folds():
 
     feats = build_signal_features(df, index_ohlcv=index_df).replace([np.inf, -np.inf], np.nan)
     sample = feats[FEATURE_COLUMNS].iloc[260::4].dropna(how="all").fillna(0.0)
-    score = sample["pos_52w"] + 0.8 * sample["trend_consistency_20"]
+    score = sample["pos_52w"] + 0.8 * sample["stock_trend_quality"]
     labels = (score > score.median()).astype(np.float64).to_numpy()
 
     top_features: list[str] = []
@@ -51,5 +51,5 @@ def test_feature_importance_stability_across_folds():
 
     counts = {name: top_features.count(name) for name in set(top_features)}
     repeated = [name for name, count in counts.items() if count >= 2]
-    assert {"pos_52w", "trend_consistency_20"} & set(repeated)
+    assert {"pos_52w", "stock_trend_quality"} & set(repeated)
     assert len(repeated) >= 2

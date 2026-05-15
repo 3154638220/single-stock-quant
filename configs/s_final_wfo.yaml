@@ -1,0 +1,21 @@
+# E_SINGLE: WFO validation config with focused parameter grid (S6)
+# Uses profit_lock params in the grid since experiments showed they're the
+# most effective levers; stop_loss, time_stop fixed as base config.
+#
+# FOCUSED_PARAM_GRID: 3^4 = 81 combinations (vs 324 in default grid)
+
+backtest:
+  stop_loss_pct: 0.08
+  time_stop_days: 30
+  time_stop_min_return: 0.03
+  # profit_lock_trigger and profit_lock_trailing are in the WFO grid
+
+signal_filter:
+  volume_confirm: true
+
+wfo:
+  param_grid:
+    macd_fast: [10, 12, 14]
+    macd_signal: [8, 9, 10]
+    profit_lock_trigger: [0.06, 0.08, 0.10]
+    profit_lock_trailing: [0.03, 0.04, 0.06]
