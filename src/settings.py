@@ -197,13 +197,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         },
     },
     "wfo": {
-        "param_grid": {
-            "macd_fast": [8, 10, 12, 14],
-            "macd_slow": [22, 26, 30],
-            "macd_signal": [7, 9, 11],
-            "min_run_len": [1, 2, 3],
-            "stop_loss_pct": [0.05, 0.08, 0.10],
-        },
+        # param_grid intentionally omitted so user configs fully replace it.
+        # normalize_param_grid() in wfo.py provides the default grid when no
+        # config grid is supplied.
     },
     "risk": {
         "enable_index_filter": False,

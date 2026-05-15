@@ -23,10 +23,18 @@ backtest:
     assert cfg["backtest"]["cost_bps"] == 8
     assert cfg["backtest"]["execution"] == "tplus1_open"
     assert cfg["paths"]["duckdb_path"] == "data/market.duckdb"
-    assert cfg["wfo"]["param_grid"]["macd_fast"] == [8, 10, 12, 14]
+    assert cfg["wfo"] == {}
+    assert "param_grid" not in cfg["wfo"]
 
 
 def test_normalize_param_grid_accepts_configured_values():
     grid = normalize_param_grid({"macd_fast": [6, 12], "macd_signal": 9})
 
     assert grid == {"macd_fast": [6, 12], "macd_signal": [9]}
+
+
+def test_normalize_param_grid_falls_back_to_default():
+    grid = normalize_param_grid(None)
+    assert grid["macd_fast"] == [8, 10, 12, 14]
+    assert grid["macd_slow"] == [22, 26, 30]
+    assert "profit_lock_trigger" not in grid

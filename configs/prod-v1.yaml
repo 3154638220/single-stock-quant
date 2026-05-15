@@ -1,0 +1,27 @@
+# E_SINGLE production config v1.0
+# WFO-validated on 5 stocks, wfo_stable config (9-combo MACD grid only)
+# Validated 2026-05-15: median OOS Sharpe 0.537 on passing watchlist
+#
+# Key decisions:
+#   profit_lock params FIXED at 0.08/0.04 (anti-overfitting, confirmed by WFO)
+#   MACD params optimized per-fold via WFO (macd_fast × macd_signal = 9 combos)
+#   Meta-label: OFF (GBM+label_v4 degraded Sharpe 0.93→0.44 on 600030)
+#   Watchlist: 5 stocks with WFO OOS Sharpe >= 0.25
+
+backtest:
+  stop_loss_pct: 0.08
+  time_stop_days: 30
+  time_stop_min_return: 0.03
+  profit_lock_trigger: 0.08
+  profit_lock_trailing: 0.04
+
+signal_filter:
+  volume_confirm: true
+
+wfo:
+  param_grid:
+    macd_fast: [10, 12, 14]
+    macd_signal: [8, 9, 10]
+
+paths:
+  output_dir: data/output
