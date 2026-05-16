@@ -40,6 +40,8 @@ def build_bt_kwargs(cfg: dict[str, Any], *, index_ohlcv: pd.DataFrame | None = N
         "trailing_stop_pct": float(bt_cfg.get("trailing_stop_pct", 0.0)),
         "atr_stop_multiplier": float(bt_cfg.get("atr_stop_multiplier", 0.0)),
         "atr_stop_period": int(bt_cfg.get("atr_stop_period", 14)),
+        "atr_trailing_mult": float(bt_cfg.get("atr_trailing_mult", 0.0)),
+        "atr_trailing_min_gain": float(bt_cfg.get("atr_trailing_min_gain", 0.0)),
         "risk_per_trade_pct": float(bt_cfg.get("risk_per_trade_pct", 0.0)),
         "position_size_cap": float(bt_cfg.get("position_size_cap", 1.0)),
         "stop_reentry_enabled": bool(bt_cfg.get("stop_reentry_enabled", False)),

@@ -31,9 +31,9 @@ def main() -> int:
     parser.add_argument("--symbol", required=True)
     parser.add_argument("--start")
     parser.add_argument("--end")
-    parser.add_argument("--train-days", type=int, default=504)
-    parser.add_argument("--oos-days", type=int, default=126)
-    parser.add_argument("--mode", choices=[m.value for m in TrendMode], default="macd_cross")
+    parser.add_argument("--train-days", type=int)
+    parser.add_argument("--oos-days", type=int)
+    parser.add_argument("--mode", choices=[m.value for m in TrendMode], help="Trend mode; defaults to trend_signal.mode in config")
     parser.add_argument("--window", choices=["rolling", "expanding"], default="rolling")
     parser.add_argument("--nested", action="store_true", help="Use nested WFO (outer→inner) for honest OOS evaluation")
     parser.add_argument("--inner-train-days", type=int, default=504, help="Inner WFO train days (for --nested)")
@@ -65,6 +65,9 @@ def main() -> int:
 
     cfg = load_config(args.config)
     wfo_cfg = cfg.get("wfo", {}) or {}
+    train_days = int(args.train_days if args.train_days is not None else wfo_cfg.get("train_days", 504))
+    oos_days = int(args.oos_days if args.oos_days is not None else wfo_cfg.get("oos_days", 126))
+    selected_mode = args.mode or str((cfg.get("trend_signal", {}) or {}).get("mode", "macd_cross"))
     symbol = str(args.symbol).strip().zfill(6)
     with DuckDBManager(config_path=args.config, duckdb_path=args.duckdb_path) as db:
         df = db.read_daily_frame(symbols=[symbol], start=args.start, end=args.end)
@@ -98,13 +101,13 @@ def main() -> int:
         result = run_nested_walk_forward_optimization(
             symbol,
             df,
-            base_params=_params(cfg, args.mode),
+            base_params=_params(cfg, selected_mode),
             param_grid=wfo_cfg.get("param_grid"),
-            outer_train_days=args.train_days,
-            outer_oos_days=args.oos_days,
+            outer_train_days=train_days,
+            outer_oos_days=oos_days,
             inner_train_days=args.inner_train_days,
             inner_oos_days=args.inner_oos_days,
-            mode=args.mode,
+            mode=selected_mode,
             window=args.window,
             cost_bps=bt_kwargs.pop("cost_bps"),
             initial_capital=bt_kwargs.pop("initial_capital"),
@@ -120,7 +123,7 @@ def main() -> int:
         )
 
         agg = result["aggregated"]
-        print(f"{symbol} Nested WFO | mode={args.mode} | outer_folds={result['n_outer_folds']}")
+        print(f"{symbol} Nested WFO | mode={selected_mode} | outer_folds={result['n_outer_folds']}")
         print(
             "OOS combined (truly unseen): "
             f"ann={agg.get('annualized_return', float('nan')):.4f} "
@@ -152,11 +155,11 @@ def main() -> int:
         result = run_walk_forward_optimization(
             symbol,
             df,
-            base_params=_params(cfg, args.mode),
+            base_params=_params(cfg, selected_mode),
             param_grid=wfo_cfg.get("param_grid"),
-            train_days=args.train_days,
-            oos_days=args.oos_days,
-            mode=args.mode,
+            train_days=train_days,
+            oos_days=oos_days,
+            mode=selected_mode,
             window=args.window,
             cost_bps=bt_kwargs.pop("cost_bps"),
             initial_capital=bt_kwargs.pop("initial_capital"),
@@ -172,7 +175,7 @@ def main() -> int:
         )
 
         agg = result["aggregated"]
-        print(f"{symbol} WFO | mode={args.mode} | folds={result['n_folds']}")
+        print(f"{symbol} WFO | mode={selected_mode} | folds={result['n_folds']}")
         print(
             "OOS combined: "
             f"total={agg.get('total_return_combined', float('nan')):.4f} "

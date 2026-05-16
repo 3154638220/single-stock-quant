@@ -11,6 +11,7 @@ import argparse
 import os
 import sys
 import tempfile
+from dataclasses import asdict
 from pathlib import Path
 
 import pandas as pd
@@ -25,10 +26,11 @@ from src.indicators import DKTrendParams, TrendMode, compute_dktrend
 from src.settings import load_config, project_root
 
 
-def _params(cfg: dict, mode: str | None) -> DKTrendParams:
+def _params(cfg: dict, mode: str | None, overrides: dict | None = None) -> DKTrendParams:
     raw = dict(cfg.get("trend_signal", {}) or {})
     if mode:
         raw["mode"] = mode
+    raw.update(overrides or {})
     return DKTrendParams.from_mapping(raw)
 
 
@@ -60,7 +62,10 @@ def _params_from_spec(spec: str) -> tuple[str, DKTrendParams]:
                 k, v = part.split("=", 1)
                 extra[k.strip()] = float(v) if "." in v else int(v)
             elif part.isdigit():
-                extra["trend_ma_period"] = int(part)
+                if mode_str.strip() == TrendMode.EASTMONEY_DKBAR.value:
+                    extra["lst_period"] = int(part)
+                else:
+                    extra["trend_ma_period"] = int(part)
     else:
         mode_str = spec
 
@@ -69,36 +74,18 @@ def _params_from_spec(spec: str) -> tuple[str, DKTrendParams]:
 
     mode = TrendMode(mode_str.strip())
     label_parts = [mode.value]
+    if "lst_period" in extra:
+        label_parts.append(str(extra["lst_period"]))
     if "trend_ma_period" in extra:
         label_parts.append(str(extra["trend_ma_period"]))
     if "dual_ma_fast" in extra and "dual_ma_slow" in extra:
         label_parts.append(f"{extra['dual_ma_fast']}-{extra['dual_ma_slow']}")
     label = ":".join(label_parts)
 
-    base = DKTrendParams(mode=mode)
-    params = DKTrendParams(
-        mode=mode,
-        macd_fast=base.macd_fast,
-        macd_slow=base.macd_slow,
-        macd_signal=base.macd_signal,
-        ma_fast=base.ma_fast,
-        ma_slow=base.ma_slow,
-        ma_smooth=base.ma_smooth,
-        boll_window=base.boll_window,
-        min_run_len=base.min_run_len,
-        donchian_entry_window=base.donchian_entry_window,
-        donchian_exit_window=base.donchian_exit_window,
-        trend_ma_period=int(extra.get("trend_ma_period", base.trend_ma_period)),
-        trend_ma_type=str(extra.get("trend_ma_type", base.trend_ma_type)),
-        slope_lookback=int(extra.get("slope_lookback", base.slope_lookback)),
-        require_positive_slope=bool(extra.get("require_positive_slope", base.require_positive_slope)),
-        dual_ma_fast=int(extra.get("dual_ma_fast", base.dual_ma_fast)),
-        dual_ma_slow=int(extra.get("dual_ma_slow", base.dual_ma_slow)),
-        trend_score_ma_long=int(extra.get("trend_score_ma_long", base.trend_score_ma_long)),
-        trend_score_ma_fast=int(extra.get("trend_score_ma_fast", base.trend_score_ma_fast)),
-        trend_score_ma_slow=int(extra.get("trend_score_ma_slow", base.trend_score_ma_slow)),
-        min_breakout_days=int(extra.get("min_breakout_days", base.min_breakout_days)),
-    )
+    raw = asdict(DKTrendParams(mode=mode))
+    raw.update(extra)
+    raw["mode"] = mode.value
+    params = DKTrendParams.from_mapping(raw)
     return label, params
 
 
@@ -196,6 +183,86 @@ def _plot(trend: pd.DataFrame, *, title: str, mode: str, output_path: Path) -> N
     plt.close(fig)
 
 
+def _plot_eastmoney_dkbar(trend: pd.DataFrame, *, title: str, mode: str, output_path: Path) -> None:
+    mdates, plt, has_cjk = _load_matplotlib()
+    plot_df = trend.copy()
+    plot_df["trade_date"] = pd.to_datetime(plot_df["trade_date"])
+
+    visual_color = plot_df.get("bar_color", plot_df["dk_color"])
+    trend_state = plot_df.get("trend_state", plot_df["dk_color"])
+    valid_colors = visual_color.isin(["red", "green"])
+    trend_valid = trend_state.isin(["red", "green"])
+    switch_count = int(((trend_state != trend_state.shift(1)) & trend_valid).sum())
+    total_days = (plot_df["trade_date"].max() - plot_df["trade_date"].min()).days
+    switches_per_year = switch_count / max(total_days / 365.0, 0.25)
+
+    fig, (ax_price, ax_state) = plt.subplots(
+        2,
+        1,
+        figsize=(16, 9),
+        sharex=True,
+        gridspec_kw={"height_ratios": [4, 1]},
+        constrained_layout=True,
+    )
+    display_title = title if has_cjk else _ascii_fallback(title)
+    ax_price.set_title(f"{display_title} Eastmoney DK Bar ({mode})")
+    ax_price.plot(plot_df["trade_date"], plot_df["close"], color="#1f2937", linewidth=1.0, alpha=0.75, label="Close")
+    ax_price.plot(plot_df["trade_date"], plot_df["lst"], color="#f59e0b", linewidth=1.6, label="LST")
+
+    for color_name, mpl_color in [("red", "#d62728"), ("green", "#2ca02c")]:
+        mask = visual_color.eq(color_name)
+        ax_price.vlines(
+            plot_df.loc[mask, "trade_date"],
+            plot_df.loc[mask, "bar_low"],
+            plot_df.loc[mask, "bar_high"],
+            color=mpl_color,
+            linewidth=1.6,
+            alpha=0.95,
+        )
+
+    buy = plot_df["dk_signal"].eq("buy")
+    sell = plot_df["dk_signal"].eq("sell")
+    ax_price.scatter(plot_df.loc[buy, "trade_date"], plot_df.loc[buy, "low"], marker="^", s=46, color="#d62728", label="Buy")
+    ax_price.scatter(plot_df.loc[sell, "trade_date"], plot_df.loc[sell, "high"], marker="v", s=46, color="#2ca02c", label="Sell")
+
+    latest = plot_df[valid_colors].tail(1)
+    if not latest.empty:
+        row = latest.iloc[0]
+        stats = (
+            f"LST:{row['lst']:.2f}  BARHIGH:{row['bar_high']:.2f}  BARLOW:{row['bar_low']:.2f}  "
+            f"bar:{visual_color.loc[row.name]}  trend:{trend_state.loc[row.name]}  run:{int(row['dk_run_len'])}  switches/yr:{switches_per_year:.1f}"
+        )
+        ax_price.text(
+            0.01,
+            0.98,
+            stats,
+            transform=ax_price.transAxes,
+            va="top",
+            ha="left",
+            fontsize=9,
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.78, edgecolor="#d1d5db"),
+        )
+
+    ax_price.set_ylabel("Price")
+    ax_price.grid(True, alpha=0.22)
+    ax_price.legend(loc="upper left", fontsize=8)
+
+    state_colors = trend_state.map({"red": "#d62728", "green": "#2ca02c"}).fillna("#d1d5db")
+    ax_state.bar(plot_df["trade_date"], [1] * len(plot_df), color=state_colors, width=0.9, align="center")
+    ax_state.scatter(plot_df.loc[buy, "trade_date"], [1.08] * int(buy.sum()), marker="^", s=34, color="#7f1d1d")
+    ax_state.scatter(plot_df.loc[sell, "trade_date"], [1.08] * int(sell.sum()), marker="v", s=34, color="#14532d")
+    ax_state.set_ylim(0, 1.25)
+    ax_state.set_yticks([])
+    ax_state.set_ylabel("Trend")
+    ax_state.grid(False)
+    ax_state.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
+    fig.autofmt_xdate()
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=150)
+    plt.close(fig)
+
+
 def _plot_comparison(df: pd.DataFrame, results: list[tuple[str, pd.DataFrame]], *,
                      title: str, output_path: Path) -> None:
     """Plot multiple trend-line candidates on shared axes for visual comparison."""
@@ -279,9 +346,23 @@ def main() -> int:
     parser.add_argument("--symbol", required=True, help="Single 6-digit symbol, e.g. 600930")
     parser.add_argument("--start", help="Start date, YYYY-MM-DD")
     parser.add_argument("--end", help="End date, YYYY-MM-DD")
-    parser.add_argument("--history", type=int, default=180,
-                        help="Keep the latest N valid daily bars after date filtering")
+    parser.add_argument("--history", type=int, default=0,
+                        help="Keep the latest N valid daily bars after date filtering; 0 keeps the full filtered range")
     parser.add_argument("--mode", choices=[m.value for m in TrendMode])
+    parser.add_argument("--lst-period", type=int)
+    parser.add_argument("--lst-method")
+    parser.add_argument("--bar-period", type=int)
+    parser.add_argument("--bar-method")
+    parser.add_argument("--bar-color-method")
+    parser.add_argument("--bar-range-period", type=int)
+    parser.add_argument("--bar-range-mult", type=float)
+    parser.add_argument("--slope-lookback", type=int)
+    parser.add_argument("--slope-tolerance", type=float)
+    parser.add_argument("--state-confirm-days", type=int)
+    parser.add_argument("--hysteresis-pct", type=float)
+    parser.add_argument("--atr-period", type=int)
+    parser.add_argument("--atr-mult", type=float)
+    parser.add_argument("--dkx-signal-period", type=int)
     parser.add_argument("--output", help="PNG output path. Default: data/output/{symbol}_{mode}_dktrend.png")
     parser.add_argument("--config", help="Config file path")
     parser.add_argument("--duckdb-path", help="Override DuckDB path, e.g. /path/to/market.duckdb")
@@ -321,7 +402,27 @@ def main() -> int:
         print(f"已写入 {output_path}")
         return 0
 
-    params = _params(cfg, args.mode)
+    overrides = {
+        key: value
+        for key, value in {
+            "lst_period": args.lst_period,
+            "lst_method": args.lst_method,
+            "bar_period": args.bar_period,
+            "bar_method": args.bar_method,
+            "bar_color_method": args.bar_color_method,
+            "bar_range_period": args.bar_range_period,
+            "bar_range_mult": args.bar_range_mult,
+            "slope_lookback": args.slope_lookback,
+            "slope_tolerance": args.slope_tolerance,
+            "state_confirm_days": args.state_confirm_days,
+            "hysteresis_pct": args.hysteresis_pct,
+            "atr_period": args.atr_period,
+            "atr_mult": args.atr_mult,
+            "dkx_signal_period": args.dkx_signal_period,
+        }.items()
+        if value is not None
+    }
+    params = _params(cfg, args.mode, overrides)
     mode = str(params.mode.value)
     trend = compute_dktrend(df, params)
     trend = trend[trend["dk_color"].isin(["red", "green"])].copy()
@@ -331,7 +432,10 @@ def main() -> int:
         raise SystemExit(f"not enough daily data to compute DK trend for {symbol}")
 
     output_path = _resolve_output_path(args.output, cfg, symbol, mode)
-    _plot(trend, title=f"{stock_name} ({symbol})", mode=mode, output_path=output_path)
+    if params.mode == TrendMode.EASTMONEY_DKBAR and {"lst", "bar_high", "bar_low"} <= set(trend.columns):
+        _plot_eastmoney_dkbar(trend, title=f"{stock_name} ({symbol})", mode=mode, output_path=output_path)
+    else:
+        _plot(trend, title=f"{stock_name} ({symbol})", mode=mode, output_path=output_path)
     print(f"已写入 {output_path}")
     return 0
 

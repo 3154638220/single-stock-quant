@@ -1,96 +1,110 @@
 <claude-mem-context>
 # Memory Context
 
-# [single-stock-quant] recent context, 2026-05-15 8:05pm GMT+8
+# [single-stock-quant] recent context, 2026-05-16 9:09pm GMT+8
 
 Legend: 🎯session 🔴bugfix 🟣feature 🔄refactor ✅change 🔵discovery ⚖️decision 🚨security_alert 🔐security_note
 Format: ID TIME TYPE TITLE
 Fetch details: get_observations([IDs]) | Search: mem-search skill
 
-Stats: 50 obs (21,039t read) | 619,090t work | 97% savings
+Stats: 50 obs (19,168t read) | 832,733t work | 98% savings
 
-### May 14, 2026
-S27 推进 docs/plan.md 实验闭环 — 5 变体组合回测 sweep + ranking 归因分析 + E16 重构规划 (May 14, 12:06 PM)
-S28 推进 plan.md 中的 E16 阶段：组合 ranking 重构实验 — 实现三种 ranking profile（balanced/meta_priority/dk_meta），添加 DK 红色趋势候选池约束，跑两轮真实数据实验，并更新 plan.md 文档 (May 14, 12:17 PM)
-S29 继续推进 plan.md — 实现 E17 dk_fresh_meta 新近DK候选池实验，验证"趋势未老化"假设，并更新计划文档 (May 14, 12:32 PM)
-S30 推进 plan.md 到阶段 18 — 实现并实跑 E18 rolling forward-return calibration 实验，结论确认失败并记录战略转向 (May 14, 12:42 PM)
-S31 推进 plan.md Stage 19: 候选池根因归因 — 实现按 symbol/market regime/industry 拆解 DK 红色候选池 forward return 的诊断工具，并用 E16 dk_meta 分数完成首跑 (May 14, 12:59 PM)
-414 1:03p ⚖️ Portfolio ranking iterations E10-E18 all failed to meet targets; strategy pivot to single-stock root cause analysis
-415 " 🟣 Portfolio ranking attribution analysis tool built: scripts/analyze_portfolio_ranking.py and src/portfolio/attribution.py
-416 " 🟣 Five portfolio ranking profiles implemented in src/portfolio/signal_ranker.py
-421 1:05p 🟣 New candidate forward return breakdown function added to attribution module for single-stock root cause analysis
-422 1:06p 🟣 New CLI script for candidate forward return breakdown analysis: scripts/analyze_candidate_breakdown.py
-423 " 🟣 Tests added for candidate forward return breakdown in test_portfolio.py
-424 " 🟣 Experiment artifact manifest updated to include candidate_breakdown.csv
-425 " 🔵 E16 dk_meta candidate breakdown reveals worst-performing stocks: 万科A, 保利发展, 海螺水泥 at 20-day horizon
-426 1:07p 🔴 Market regime classification now falls back to cross-sectional average when index OHLCV is unavailable
-427 1:08p 🔵 E16 dk_meta candidate breakdown with regime: 000002 (万科A) worst across all regimes; bull regime has highest weighted mean but bears contribute large share
-428 " ✅ Plan.md updated with Stage 19 progress: candidate pool root cause analysis complete with actionable findings
-429 " 🟣 Stage 19 complete: candidate pool root cause analysis delivered actionable diagnostic identifying worst/best stocks by symbol and regime
-430 " ✅ Full test suite passing (182 tests) after Stage 19 implementation
-S32 推进 plan.md Stage 19: 候选池根因归因 — 实现按 symbol/market regime/industry 拆解 DK 红色候选池 forward return 的诊断工具，并用 E16 dk_meta 分数完成首跑 (May 14, 1:09 PM)
-S33 推进 E20：结构性 symbol/行业护栏 — 实现、实跑、验证并回写 plan.md，基于 E19 根因分析对 000002/600048 排除、600585 降权 (May 14, 1:10 PM)
-431 1:12p ⚖️ E19 root cause analysis: negative portfolio returns driven by specific weak symbols, not market regime
-432 " ⚖️ E16-E18 ranking experiments all fail to deliver positive Sharpe; strategy pivot to E20 sector/stock filtering
-433 " 🟣 New candidate pool root-cause attribution tool: analyze_candidate_breakdown.py
-434 1:13p 🟣 E20: Symbol-level blacklist/greylist filtering added to portfolio ranking pipeline
-435 1:14p 🟣 E20 CLI wiring complete: run_portfolio_backtest.py supports exclude/greylist symbols, industry map, and industry concentration caps
-436 " 🔵 Plan document confirms E16-E19 ranking experiments complete — all failed to achieve positive Sharpe; strategy pivots to E20 structural filtering
-437 1:15p 🟣 Stage 20 (E20) code implementation complete: symbol-level blacklist/greylist structural guardrails for portfolio ranking
-438 " 🟣 E20 real-data experiment launched: dk_meta profile with exclude symbols 000002,600048 and greylist 600585
-439 1:16p 🔵 E20 real-data experiment still processing: expanding-window meta-label training on 25 stocks takes significant wall time
-440 1:17p 🔵 E20 portfolio backtest runtime: expanding-window meta-label scoring for 25 stocks is IO/compute intensive (~105+ seconds and counting)
-441 " 🔵 E20 experiment results: excluding 000002/600048 and greylisting 600585 dramatically improves all portfolio metrics vs E16 baseline
-442 1:18p 🔵 E20 complete validation: 7 of 12 metrics improved vs E16, excluded symbols fully removed, ranking top-bottom positive for all horizons
-443 " 🔵 Full test suite passes: 174 tests, ruff identifies 40 pre-existing lint issues (none related to E20 changes)
-444 1:19p 🟣 E20 complete: Stage 20 structural filtering implemented and validated — first experiment (E16-E20) to achieve all positive portfolio metrics
-S34 Analyzed plan-05-15(2).md improvement plan and comparison charts to assess whether the new long-period MA trend indicators can replicate East Money's "多空趋势" orange curve (May 14, 1:20 PM)
 ### May 15, 2026
-445 7:32p 🔵 DK indicator is fundamentally wrong: MACD histogram ≠ trend line
-446 " 🔵 EMA cold-start bias corrupts first 3-6 months of long-period trend signals
-447 " 🔵 Exit signal lags price peak by 16-26 days due to triple EMA chain
-448 " 🔵 profit_lock creates systematic friction on low-priced stocks, cutting winners at bottoms
-449 " 🔵 Strategy success entirely dependent on one unrepeatable policy event (2024-09 stimulus)
-450 " 🔵 WFO optimizes wrong parameter space: macd_fast/macd_signal noise instead of trend period
-451 " ⚖️ Three hypotheses for East Money's actual trend algorithm, with price-vs-EMA as most likely
-452 " ⚖️ 6-phase improvement roadmap: redesign indicator → visual verification → exit mechanism → WFO → backtest → scale
-453 " ⚖️ Visual verification success criteria: orange curve position, switch count ≤ 5/year, LST anchor match
-S35 Corrected the replication target: East Money's "多空趋势" is a main-chart overlay with LST orange trend line + BARHIGH/BARLOW red-green bars, not a sub-chart MACD histogram (May 15, 7:34 PM)
-454 7:36p 🔵 Project's intellectual history: from assuming DK=MACD histogram to recognizing fundamental indicator error
-455 7:51p 🔵 Root cause analysis: DK trend indicator fundamentally mismatches target
-456 7:52p ⚖️ Three new trend modes proposed for dktrend.py: LONG_MA_TREND, DUAL_MA_CROSS, TREND_SCORE
-457 " ⚖️ Exit mechanism redesigned: trend-line-based exit replaces profit_lock + MACD-dependent sell
-458 " ⚖️ WFO parameter space redesigned: trend_ma_period replaces macd_fast/macd_signal as optimization target
-459 " ⚖️ Visual comparison tool specified: plot_dktrend.py enhanced with multi-mode overlay and switch-frequency stats
-460 7:54p ⚖️ Plan corrected: target is red-green bar state machine, not just orange trend line
-461 " ⚖️ Reverse-engineering hypotheses completely rewritten with 5 new hypotheses and concrete calibration anchor
-462 " ⚖️ EASTMONEY_DKBAR mode specified: structured DataFrame output with LST, bar fields, state machine, and hysteresis
-463 7:55p ⚖️ DKTrendParams restructured: 10 new EASTMONEY_DKBAR-specific fields with hysteresis and state confirmation
-464 " ⚖️ Visual tool redesigned: plot_eastmoney_dkbar() replaces plot_comparison() with red/green vlines and LST overlay
-465 7:56p ⚖️ Exit mechanism and WFO both realigned to eastmoney_dkbar color-flip signals
-466 " ✅ Plan document fully aligned: all stale "long_ma_trend/trend line" references replaced with eastmoney_dkbar terminology
-467 7:57p ✅ Plan document fully edited: all sections now correctly target eastmoney_dkbar red-green bar state machine
-S36 Revise improvement plan docs/plan-05-15(2).md to correct target from "replicate orange trend line" to "replicate 东方财富 multi-empty red-green bar state machine with LST/BARHIGH/BARLOW" (May 15, 7:58 PM)
-**Investigated**: The 799-line plan document was read in 5 chunks (lines 1-220, 220-520, 520-700, 720-805, 180-460, 460-740) to understand the full scope before editing. A 2026-02-03 screenshot calibration anchor was discovered with exact values: close=8.46, daily range 8.36-8.76, but 东方财富 LST=7.66, BARHIGH=8.38, BARLOW=8.35 — proving BARHIGH/BARLOW are not OHLC copies but indicator-internal compressed bars. Five reverse-engineering hypotheses were formulated (A through E), with Hypothesis A (LST long-period baseline + bar state machine) ranked highest priority.
+S44 User provided 6 Eastmoney screenshot anchor points for stock 000783 — calibration revealed bar_color ≠ trade_state, leading to architectural pivot and full implementation of bar_color/trend_state split across the codebase (May 15, 9:22 PM)
+S45 User provided 6 Eastmoney screenshot anchor points for stock 000783 — calibration disproved the bar_color=trade_state hypothesis, leading to an architectural split of visual bar_color from trading trend_state, with full implementation across code/configs/tests/docs (May 15, 9:23 PM)
+S46 Claude clarified to user: the Eastmoney DK bar indicator has NOT been successfully replicated — only the engineering framework was corrected (bar_color/trend_state split), and the actual indicator reverse-engineering is still unsolved (May 15, 9:23 PM)
+S47 User asked if there's a next-phase plan — Claude confirmed the plan document has direction (bar_color/trend_state split done, need to optimize each independently) but lacks a detailed executable task list (May 15, 9:24 PM)
+S48 User provided 6 Eastmoney screenshot anchor points for stock 000783 (dates, LST, BARHIGH, BARLOW, color) — Claude calibrated the DK bar indicator against them, discovered the bar_color ≠ trade_state hypothesis was fundamentally wrong, made an architectural pivot, and fully implemented the bar_color/trend_state split across code, configs, tests, and documentation (May 15, 9:24 PM)
+539 9:28p ✅ Plan document completely rewritten with structured executive summary and concrete E21–E25 execution roadmap
+540 " ✅ Plan document completely rewritten: ~960-line accumulated doc → clean 7-section ~400-line structured roadmap
+S49 Advance plan-05-15(2).md: Implement E21 (anchor calibration dataset solidification) and E22 (bar_color state machine reverse-engineering) for Eastmoney DK Trend replication on stock 000783 (May 15, 9:30 PM)
+541 9:32p 🔵 DK Trend reverse-engineering: engineering structure separates visual layer from trading layer
+542 " ⚖️ 5-phase execution plan (E21-E25) defined with clear gating criteria before expanding to 25 stocks
+543 " 🔵 7 anchor points for 000783 with known Eastmoney ground-truth values for LST, BARHIGH, BARLOW, and bar_color
+544 " 🔵 Working tree shows 10 modified files and 2 new config files across indicators, backtest, scripts, and tests
+545 9:34p 🟣 E21 started: created data/anchors/ directory to hold calibration anchor CSV
+546 " 🟣 E21 complete: anchor CSV, calibration scoring script, and validation tests implemented
+547 " 🔵 Calibration script reveals config defaults produce empty bar_color for all 7 anchors; sma60_wma20 is best candidate at 5/7 hit rate
+548 9:35p 🔴 Calibration script patched: bar_color_accuracy now counts all anchors and default start extended to 2020-01-01
+549 9:36p 🔵 Diagnostic probe of failing anchors reveals bar_color flips green on intra-trend price dips while bar_mid remains above LST
+550 " 🔵 Multi-window probe confirms bar_color=price_change flips green on every down day regardless of trend context
+551 9:37p 🟣 E22 implemented: persistent_price_change state machine added to bar_color system in dktrend.py
+552 9:38p 🟣 Test added for persistent_price_change: validates red-hold on pullbacks vs price_change baseline
+553 " 🔵 persistent_price_change produces zero improvement over price_change on real data — all 8 candidates still at 5/7
+554 9:39p 🔴 persistent_price_change bug fixed: pullback_days counter now resets on price rise and initial state
+555 " 🔵 Bug-fixed persistent_price_change achieves 6/7 anchor hit rate with persistent_sma60_wma20 — E22 acceptance criteria met
+556 9:40p 🔴 Persistent-price-change unit test parameters corrected to match working grid result
+557 " ✅ Unit test parameters corrected: lst_period=5, bar_period=1 with wider closes grid for persistent_price_change test
+558 " 🟣 E22 complete: all 7 tests pass, persistent_sma60_wma20 achieves 6/7 anchor hit rate meeting ≥6/7 acceptance criteria
+559 9:41p ✅ Plan document updated to reflect E21 completion and E22 partial success with persistent_sma60_wma20 at 6/7
+560 " ✅ Plan document fully updated: E21 and E22 sections marked complete with results, E22 gating clarified for E23
+561 9:42p 🟣 Full test suite passes (all tests green) after E21+E22 implementation — 7 key files modified, 3 new files created
+562 9:43p ✅ Gitignore updated to track anchor CSVs while keeping data directory excluded
+S50 Advance plan-05-15(2).md: Implement E21 (anchor calibration dataset solidification) and E22 (bar_color state machine reverse-engineering) for Eastmoney DK Trend replication on stock 000783, then run grid search to discover optimal parameters (May 15, 9:43 PM)
+563 9:46p 🟣 Calibration script upgraded with grid search, backtest integration, and multi-objective ranking
+564 9:49p 🔵 Grid search across 120 DK bar candidates: best objective_score is -0.36, all negative — trend_state drives trading not bar_color
+565 9:50p ✅ Grid search optimized: persistent_price_change removed from grid as it produces identical backtest results to price_change
+566 " 🔵 Full grid search over 252 candidates finds sma205_wma5_c3_h0 achieves +0.372 objective score with +23.86% return and 4 trades — first positive score in the session
+567 9:51p ✅ Both DK bar configs updated to sma205_wma5 with persistent_price_change, confirm_days=3, hysteresis=0.0 — WFO param grid now uses DK-specific dimensions
+568 9:52p ⚖️ Plan strategy shifted: anchor fit demoted from optimization objective to visual constraint; return quality now primary ranking criterion
+S51 Advance plan-05-15(2).md through E21 and E22 implementation, then pivot strategy from anchor-first to return-first calibration for Eastmoney DK Trend reverse-engineering on stock 000783 (May 15, 9:53 PM)
+S52 诊断000783长江证券DK趋势背测问题：5笔交易总收益+20.61%但依赖单笔大赢家，分析入场信号、退出机制、参数稳定性 (May 15, 9:54 PM)
+### May 16, 2026
+569 8:34p 🔵 DK Trend背测分析：000783长江证券5笔交易深度诊断
+570 8:35p 🔵 DK趋势退出机制优先级链确认：profit_lock在ATR trailing之后执行
+571 " 🔵 eastmoney_dkbar配置显式关闭profit_lock，与生产配置形成对比
+572 " 🔵 DK参数网格搜索确认SMA205/WMA5/state_confirm=3为000783最优收益候选
+573 " 🔵 背测退出在000783上time_stop主导，ATR trailing仅在Trade 4成功触发
+574 " 🔵 背测参数通过config.py统一构建，确保single/batch/WFO入口一致性
+575 " 🔵 eastmoney_dkbar校准流程：锚点评分+背测收益双维度评估候选参数
+576 8:37p 🔵 场景测试揭示：profit_lock产生反效果，降低000783总收益从+20.6%到+8.3%
+577 " 🔵 000783网格搜索：仅23/252候选正收益，SMA205是唯一正收益LST周期
+578 " 🔵 000783 WFO stable已通过MACD模式获OOS Sharpe 0.81，DK模式WFO正在运行中
+579 " 🔵 退出机制场景全面对比：intrapos_dd_limit=0.06为最优，dk_fade_exit显著有害
+580 " 🔵 Trade 3浮盈转亏的微观机制：价格从7.84峰值回落至6.68，但ATR在高峰时仅0.28
+581 8:39p 🔵 WFO crash：_stability函数无法处理DK参数网格中的字符串类型参数
+582 8:40p 🔵 校准脚本完成：confirm=3是收益最优配置的充分条件，confirm=1/2/3的收益呈单调递增
+583 " 🔵 入场质量过滤器对000783效果分析：min_quality_score=50剔除了Trade 2但降低了总收益
+584 8:41p 🔵 入场过滤器的所有动量过滤器都过滤掉了唯一盈利交易Trade 4
+585 8:42p 🔵 Pullback入场过滤器系统性损害000783收益：总收益从+20.6%降至+0~2%
+586 " ⚖️ 000783 DK趋势策略诊断结论：问题不在参数选择，而在标的本身趋势持续性差且样本量过小
+587 8:43p 🔵 Profit_lock网格搜索确认：高触发阈值(0.25/0.04)为唯一改善组合，低阈值全部损害收益
+588 " 🔵 Profit_lock在000783上的阈值分界线精确确定：trigger≥0.18且trailing≥0.06时从不触发
+S53 诊断000783长江证券DK趋势背测：5笔交易总收益+20.61%但依赖单笔大赢家，分析入场信号滞后、退出保护缺失、参数稳定性不足三大问题 (May 16, 8:46 PM)
+**Investigated**: 1. **逐笔交易微观追踪**：检查了5笔交易的入场DK指标（LST/bar_mid/dk_value/trend_state）、持仓期内dk_signal变化、价格峰谷与ATR关系
+    2. **退出机制全面场景测试**：profit_lock 35组参数网格（trigger 0.08~0.25 × trailing 0.04~0.12）、ATR trailing 1.0~3.0、intrapos_dd 5%~15%、dk_fade 2~5天、time_stop开/关、多种组合
+    3. **入场过滤器测试**：min_quality_score 50/55、require_rs60、require_ma120、weekly_bullish、volume_ratio_min 1.5/2.0、pullback_entry 1~8天
+    4. **DK参数网格搜索**：252候选聚合分析（按LST周期/方法分组、confirm_days对比、hysteresis_pct效果）
+    5. **DK模式WFO尝试**：发现_stability函数对字符串参数崩溃；自定义绕过脚本在OOS窗口返回NaN
+    6. **校准脚本完整运行**：return_quality排序top15确认sma205_wma5_c3_h0最优
+    7. **2026年4-5月逐日DK数据**：确认DK indicators正常计算（之前NaN是start='2026-04-01'数据窗口不足SMA205）
+    8. **代码级机制分析**：退出优先级链（src/backtest/single_stock.py行720-770）、入场质量评分7维度（src/signals/generator.py行80-162）、DK bar计算逻辑（src/indicators/dktrend.py行438-470）
 
-**Learned**: The core insight is that 东方财富's "多空趋势" is a structured main-chart overlay with three components: (1) an orange LST baseline line acting as a trend floor or trailing stop, (2) red/green bars bounded by BARHIGH/BARLOW that are compressed smooth-price bars (not daily OHLC), and (3) a state machine with hysteresis that prevents frequent color flips. The current code outputs a single MACD histogram scalar — wrong indicator type AND wrong output structure. Trading signals should come from bar_color state transitions (green→red = buy, red→green = sell), not from MACD histogram sign changes.
+**Learned**: 1. **入场信号滞后是核心问题**：DK buy信号在2024-10-10触发时价格已从924行情+100%涨幅后开始回落（当天跌-8.04%），Trade 5也是在连续两个+10%涨停后才触发。SMA205+confirm=3的3天确认期放大了滞后
+    2. **profit_lock对000783是双刃剑**：trigger=0.08/trailing=0.04使Trade 3改善(+8.2%)但Trade 4暴跌(+2.6%)，净负。trigger=0.18为分界线——低于此值触发Trade 3的profit_lock；trigger=0.25/trailing=0.04为唯一改善组合(+26.56%, Sharpe 0.47)
+    3. **所有入场动量过滤器都排除Trade 4**：Trade 4入场时RS60=-4.86%，RS60>0/MA120之上/周线看涨/quality>55全部剔除这笔唯一盈利交易。反转入场与动量过滤器天然矛盾
+    4. **参数鲁棒性极差**：252候选中仅23个(9.1%)正收益，中位数-20.85%。仅SMA205一个LST周期产生正平均收益，bar_period=5优于10，confirm=3优于1/2
+    5. **Trade 4入场的独特性**：2025-04-24 trend_state由green翻红产生buy信号，入场时price≈LST(dist_lst仅0.02%)，是趋势反转早期入场点
+    6. **ATR trailing语义限制**：行730要求"当前收益仍≥8%"才检查ATR trailing，导致Trade 3在浮盈从+16%回落后ATR trailing被跳过，time_stop在46天时才接管
+    7. **intrapos_dd=6%为本样本最佳退出**：总收益+30.17%、Sharpe 0.52，Trade 3在+6.7%被保护退出。但高度可能过拟合
+    8. **MACD WFO在000783上OOS Sharpe 0.81**：说明问题在DK模式适配性而非标的不可交易
 
-**Completed**: Nine patches were applied to docs/plan-05-15(2).md, comprehensively revising every section:
-    - Title and core goal corrected to target red-green bar replication
-    - New Section Zero added with 8-field structured output spec (lst, bar_high, bar_low, bar_mid, bar_color, signal, run_len)
-    - Reverse-engineering section rewritten with 5 hypotheses and 2026-02-03 calibration anchor
-    - Phase A.1 changed from LONG_MA_TREND to EASTMONEY_DKBAR as primary mode; LONG_MA_TREND/DUAL_MA_CROSS demoted to baseline
-    - DKTrendParams restructured with 10 new EASTMONEY_DKBAR-specific fields including hysteresis (state_confirm_days=2, hysteresis_pct=0.003)
-    - Visual tool redesigned: plot_eastmoney_dkbar() draws orange LST line + red/green vlines from BARLOW to BARHIGH
-    - Exit mechanism changed from "close below trend line" to "dk_color_changed_to_green()"
-    - WFO config renamed wfo_eastmoney_dkbar.yaml with 135-combo grid (5×3×3×3)
-    - Phase E acceptance adds numerical anchor check and ≥80% color consistency
-    - Sections 10-12 (priority table, stop-doing list, success criteria, next steps) all aligned to eastmoney_dkbar terminology
-    - Final grep confirmed 0 stale references; code fence count verified even at 52
-    - File status: new untracked file (?? docs/plan-05-15(2).md)
+**Completed**: 1. 完成5笔交易逐日DK指标追踪，确认Trade 2/3持仓期内无任何dk_signal
+    2. 完成19种退出机制场景测试，确认intrapos_dd=6%最优、dk_fade完全有害
+    3. 完成35组profit_lock网格搜索，精确确定阈值分界线
+    4. 完成8组入场过滤器测试，确认识别出"所有过滤器排除Trade 4"的悖论
+    5. 完成5组pullback_entry场景测试，确认延迟入场全部损害收益
+    6. 完成252候选DK参数网格聚合分析
+    7. 完成return_quality校准脚本运行
+    8. 发现并记录DK WFO两处工程问题（_stability崩溃、OOS NaN）
+    9. 输出最终诊断结论给用户
 
-**Next Steps**: Phase A.1 is the immediate next step: implement TrendMode.EASTMONEY_DKBAR in src/indicators/dktrend.py, outputting the 8-column DataFrame (dk_value, dk_color, dk_signal, lst, bar_high, bar_low, bar_mid, trend_run_len). Then Phase B.1: run the visual tool to calibrate against the 2026-02-03 screenshot anchor. Finally, connect bar_color state transitions to the backtest signal pipeline.
+**Next Steps**: 按用户最终结论的优先级：
+    1. **修退出层**：实现"峰值收益达阈值后按持仓峰值回撤退出"规则，加成熟度约束避免Trade 4早期小回撤被误触发。intrapos_dd=6%需WFO验证
+    2. **修入场层**：新增过热过滤——close/LST距离、近N日涨幅、ATR%上限、连续大阳后禁入。当前momentum过滤器无效因排除反转交易
+    3. **修复DK WFO工程**：_stability函数支持字符串参数；解决OOS窗口无有效交易问题
+    4. **优先推荐**：对000783使用已验证的MACD WFO模式（OOS Sharpe 0.81），DK模式仅作为辅助参考
 
 
-Access 619k tokens of past work via get_observations([IDs]) or mem-search skill.
+Access 833k tokens of past work via get_observations([IDs]) or mem-search skill.
 </claude-mem-context>

@@ -37,6 +37,7 @@ FOCUSED_PARAM_GRID: dict[str, list] = {
 
 _BT_PARAM_KEYS = {
     "stop_loss_pct", "trailing_stop_pct", "atr_stop_multiplier", "atr_stop_period",
+    "atr_trailing_mult", "atr_trailing_min_gain",
     "volume_confirm", "volume_lookback", "volume_ratio_min",
     "risk_per_trade_pct", "position_size_cap",
     "stop_reentry_enabled", "stop_reentry_cooldown", "stop_reentry_min_run",
@@ -63,7 +64,8 @@ _VALID_BT_KWARGS = {
     "consensus_n_agree", "enable_index_filter", "index_ohlcv",
     "benchmark_symbol", "extreme_lookback_days", "extreme_drop_threshold",
     "risk_off_factor", "stop_loss_pct", "trailing_stop_pct",
-    "atr_stop_multiplier", "atr_stop_period", "risk_per_trade_pct",
+    "atr_stop_multiplier", "atr_stop_period", "atr_trailing_mult", "atr_trailing_min_gain",
+    "risk_per_trade_pct",
     "position_size_cap", "stop_reentry_enabled", "stop_reentry_cooldown",
     "stop_reentry_min_run", "cost_params",
     "min_quality_score", "quality_score_mode", "quality_score_floor",
@@ -121,7 +123,8 @@ def _composite_score(
     Hard constraints are stricter than before:
       - 4-24 trades/year (too few = sparse, too many = noise-fitting)
       - max drawdown <= 40%
-    Soft weights: Calmar (40%), Sharpe (35%), DD score (25%).
+    Soft weights: Calmar (40%), Sharpe (35%), DD score (25%), with a
+    reliability discount for sparse trade samples.
     """
     years = max(train_days / 252.0, 0.25)
     n_per_year = res.n_trades / years
@@ -138,7 +141,10 @@ def _composite_score(
     calmar = np.clip(res.calmar_ratio, -1.0, 2.0) if np.isfinite(res.calmar_ratio) else -1.0
     dd_score = max(0.0, 1.0 - res.max_drawdown) if np.isfinite(res.max_drawdown) else 0.0
 
-    return w_sharpe * sharpe + w_calmar * calmar + w_dd_score * dd_score
+    raw_score = w_sharpe * sharpe + w_calmar * calmar + w_dd_score * dd_score
+    reliability = min(1.0, max(float(res.n_trades), 0.0) / 20.0)
+    reliability = max(reliability, 0.10)
+    return raw_score * reliability if raw_score >= 0 else raw_score / reliability
 
 
 def bootstrap_sharpe_ci(

@@ -1,0 +1,35 @@
+paths:
+  duckdb_path: data/market.duckdb
+  output_dir: data/output
+
+trend_signal:
+  mode: eastmoney_dkbar
+  lst_period: 205
+  lst_method: sma
+  bar_period: 5
+  bar_method: wma
+  bar_color_method: persistent_price_change
+  bar_color_hold_days: 3
+  bar_color_min_red_run: 2
+  bar_range_period: 5
+  bar_range_mult: 0.10
+  slope_lookback: 10
+  slope_tolerance: 0.0
+  state_confirm_days: 3
+  hysteresis_pct: 0.0
+
+backtest:
+  initial_capital: 100000
+  cost_bps: 15.0
+  stop_loss_pct: 0.08
+  atr_trailing_mult: 2.5
+  atr_trailing_min_gain: 0.08
+  time_stop_days: 45
+  time_stop_min_return: 0.02
+  profit_lock_trigger: 0.0
+  profit_lock_trailing: 0.0
+
+signal_filter:
+  volume_confirm: true
+  volume_lookback: 20
+  volume_ratio_min: 1.0

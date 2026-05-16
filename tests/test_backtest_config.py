@@ -21,6 +21,8 @@ def test_build_bt_kwargs_minimal_config():
     assert kw["trailing_stop_pct"] == 0.0
     assert kw["atr_stop_multiplier"] == 0.0
     assert kw["atr_stop_period"] == 14
+    assert kw["atr_trailing_mult"] == 0.0
+    assert kw["atr_trailing_min_gain"] == 0.0
     assert kw["risk_per_trade_pct"] == 0.0
     assert kw["position_size_cap"] == 1.0
     assert kw["stop_reentry_enabled"] is False
@@ -47,6 +49,13 @@ def test_build_bt_kwargs_with_transaction_cost():
     kw = build_bt_kwargs(cfg)
     assert isinstance(kw["cost_params"], TransactionCostParams)
     assert kw["cost_params"].commission_buy_bps == 2.5
+
+
+def test_build_bt_kwargs_includes_atr_trailing_exit_params():
+    kw = build_bt_kwargs({"backtest": {"atr_trailing_mult": 2.5, "atr_trailing_min_gain": 0.08}})
+
+    assert kw["atr_trailing_mult"] == 2.5
+    assert kw["atr_trailing_min_gain"] == 0.08
 
 
 def test_build_bt_kwargs_consensus_mode():

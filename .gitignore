@@ -42,6 +42,10 @@ dmypy.json
 
 # —— 数据、数据库、运行输出（与 README / .dockerignore 一致：默认不落库）——
 data/
+!data/
+data/*
+!data/anchors/
+!data/anchors/*.csv
 output/
 tmp/
 *.duckdb

@@ -44,6 +44,7 @@ class SingleStockBacktestResult:
     stop_loss_exits: int
     trailing_stop_exits: int
     atr_stop_exits: int = 0
+    atr_trailing_exits: int = 0
     profit_lock_exits: int = 0
     market_exit_exits: int = 0
     time_stop_exits: int = 0
@@ -143,7 +144,7 @@ def _max_consecutive(values: list[bool], target: bool) -> int:
 
 
 def _future_exit_index(actions: dict[int, str], start_idx: int) -> int | None:
-    exits = [idx for idx, action in actions.items() if idx >= start_idx and action in {"sell", "stop_loss", "trailing_stop", "atr_stop", "profit_lock", "market_exit", "time_stop", "dk_fade_exit", "intrapos_dd_stop"}]
+    exits = [idx for idx, action in actions.items() if idx >= start_idx and action in {"sell", "stop_loss", "trailing_stop", "atr_stop", "atr_trailing_stop", "profit_lock", "market_exit", "time_stop", "dk_fade_exit", "intrapos_dd_stop"}]
     return min(exits) if exits else None
 
 
@@ -252,6 +253,8 @@ def run_single_stock_backtest(
     trailing_stop_pct: float = 0.0,
     atr_stop_multiplier: float = 0.0,
     atr_stop_period: int = 14,
+    atr_trailing_mult: float = 0.0,
+    atr_trailing_min_gain: float = 0.0,
     risk_per_trade_pct: float = 0.0,
     position_size_cap: float = 1.0,
     stop_reentry_enabled: bool = False,
@@ -510,7 +513,9 @@ def run_single_stock_backtest(
     trailing_stop = max(float(trailing_stop_pct), 0.0)
     atr_stop_mult = max(float(atr_stop_multiplier), 0.0)
     atr_period = max(int(atr_stop_period), 1)
-    atr_series = _compute_atr(df, atr_period) if atr_stop_mult > 0 else pd.Series(dtype=float)
+    atr_trailing_mult_val = max(float(atr_trailing_mult), 0.0)
+    atr_trailing_min_gain_val = max(float(atr_trailing_min_gain), 0.0)
+    atr_series = _compute_atr(df, atr_period) if max(atr_stop_mult, atr_trailing_mult_val) > 0 else pd.Series(dtype=float)
     risk_per_trade = max(float(risk_per_trade_pct), 0.0)
     pos_cap = max(min(float(position_size_cap), 1.0), 0.0)
     use_risk_sizing = risk_per_trade > 0 and (stop_loss > 0 or atr_stop_mult > 0)
@@ -668,7 +673,7 @@ def run_single_stock_backtest(
                         atr_stop_price = float("nan")
                 elif atr_stop_mult <= 0:
                     atr_stop_price = float("nan")
-        elif action in {"sell", "stop_loss", "trailing_stop", "atr_stop", "profit_lock", "market_exit", "time_stop", "dk_fade_exit", "intrapos_dd_stop"} and in_pos:
+        elif action in {"sell", "stop_loss", "trailing_stop", "atr_stop", "atr_trailing_stop", "profit_lock", "market_exit", "time_stop", "dk_fade_exit", "intrapos_dd_stop"} and in_pos:
             price = float(df.loc[i, "open"])
             if price <= 0 or not np.isfinite(price):
                 continue
@@ -697,7 +702,7 @@ def run_single_stock_backtest(
             )
             in_pos = False
             highest_close = float("nan")
-            if reentry_enabled and action in {"stop_loss", "trailing_stop", "atr_stop", "profit_lock", "market_exit", "time_stop", "dk_fade_exit", "intrapos_dd_stop"}:
+            if reentry_enabled and action in {"stop_loss", "trailing_stop", "atr_stop", "atr_trailing_stop", "profit_lock", "market_exit", "time_stop", "dk_fade_exit", "intrapos_dd_stop"}:
                 cooldown_remaining = reentry_cooldown
         equity[i] = shares * float(df.loc[i, "close"]) if in_pos else cash
         peak_equity = max(peak_equity, equity[i])
@@ -716,6 +721,18 @@ def run_single_stock_backtest(
                 forced_reason = "atr_stop"
             elif trailing_stop > 0 and np.isfinite(close_px) and np.isfinite(highest_close) and close_px / highest_close - 1.0 < -trailing_stop:
                 forced_reason = "trailing_stop"
+            elif (
+                atr_trailing_mult_val > 0
+                and np.isfinite(close_px)
+                and np.isfinite(highest_close)
+                and np.isfinite(entry_price)
+                and entry_price > 0
+                and close_px / entry_price - 1.0 >= atr_trailing_min_gain_val
+                and i < len(atr_series)
+            ):
+                atr_now = float(atr_series.iloc[i])
+                if np.isfinite(atr_now) and atr_now > 0 and close_px < highest_close - atr_trailing_mult_val * atr_now:
+                    forced_reason = "atr_trailing_stop"
             # S2.1 — DK momentum fade exit: dk_value declining N consecutive days
             if not forced_reason and dk_fade_enabled and i >= dk_fade_n:
                 dk_window = _dk_value_series[i - dk_fade_n + 1:i + 1]
@@ -816,6 +833,7 @@ def run_single_stock_backtest(
     stop_loss_exits = int((trade_log["exit_reason"] == "stop_loss").sum()) if not trade_log.empty else 0
     trailing_stop_exits = int((trade_log["exit_reason"] == "trailing_stop").sum()) if not trade_log.empty else 0
     atr_stop_exits = int((trade_log["exit_reason"] == "atr_stop").sum()) if not trade_log.empty else 0
+    atr_trailing_exits = int((trade_log["exit_reason"] == "atr_trailing_stop").sum()) if not trade_log.empty else 0
     profit_lock_exits = int((trade_log["exit_reason"] == "profit_lock").sum()) if not trade_log.empty else 0
     market_exit_exits = int((trade_log["exit_reason"] == "market_exit").sum()) if not trade_log.empty else 0
     time_stop_exits = int((trade_log["exit_reason"] == "time_stop").sum()) if not trade_log.empty else 0
@@ -858,6 +876,7 @@ def run_single_stock_backtest(
         stop_loss_exits=stop_loss_exits,
         trailing_stop_exits=trailing_stop_exits,
         atr_stop_exits=atr_stop_exits,
+        atr_trailing_exits=atr_trailing_exits,
         profit_lock_exits=profit_lock_exits,
         market_exit_exits=market_exit_exits,
         time_stop_exits=time_stop_exits,
