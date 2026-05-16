@@ -67,6 +67,9 @@ def main() -> int:
     wfo_cfg = cfg.get("wfo", {}) or {}
     train_days = int(args.train_days if args.train_days is not None else wfo_cfg.get("train_days", 504))
     oos_days = int(args.oos_days if args.oos_days is not None else wfo_cfg.get("oos_days", 126))
+    score_min_trades_per_year = float(wfo_cfg.get("min_trades_per_year", 4.0))
+    score_max_trades_per_year = float(wfo_cfg.get("max_trades_per_year", 24.0))
+    score_max_drawdown_limit = float(wfo_cfg.get("max_drawdown_limit", 0.40))
     selected_mode = args.mode or str((cfg.get("trend_signal", {}) or {}).get("mode", "macd_cross"))
     symbol = str(args.symbol).strip().zfill(6)
     with DuckDBManager(config_path=args.config, duckdb_path=args.duckdb_path) as db:
@@ -120,6 +123,9 @@ def main() -> int:
             meta_model_type=args.meta_model_type,
             meta_use_daily_samples=args.meta_use_daily_samples,
             stability_weighting=args.stability_weighting,
+            score_min_trades_per_year=score_min_trades_per_year,
+            score_max_trades_per_year=score_max_trades_per_year,
+            score_max_drawdown_limit=score_max_drawdown_limit,
         )
 
         agg = result["aggregated"]
@@ -172,6 +178,9 @@ def main() -> int:
             meta_model_type=args.meta_model_type,
             meta_use_daily_samples=args.meta_use_daily_samples,
             stability_weighting=args.stability_weighting,
+            score_min_trades_per_year=score_min_trades_per_year,
+            score_max_trades_per_year=score_max_trades_per_year,
+            score_max_drawdown_limit=score_max_drawdown_limit,
         )
 
         agg = result["aggregated"]

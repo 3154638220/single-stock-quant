@@ -218,11 +218,11 @@ def _stability(best_by_fold: list[dict[str, Any]]) -> dict[str, Any]:
         return out
     for key in params[0]:
         vals = [p[key] for p in params]
-        numeric = np.array(vals, dtype=np.float64)
         try:
             param_mode = mode(vals)
         except Exception:
             param_mode = vals[0]
+        numeric = pd.to_numeric(pd.Series(vals), errors="coerce").dropna().to_numpy(dtype=np.float64)
         out[key] = {
             "mode": param_mode,
             "variance": float(np.var(numeric)) if numeric.size else float("nan"),
@@ -633,6 +633,53 @@ def _compute_dk_state(
     return trend[["trade_date", "dk_color", "dk_run_len"]].copy()
 
 
+def _oos_trend_with_warmup(
+    train_df: pd.DataFrame,
+    oos_df: pd.DataFrame,
+    params: DKTrendParams,
+    bt_kwargs: dict[str, Any],
+) -> pd.DataFrame:
+    """Compute OOS trend using train rows as indicator/state warmup."""
+    context = pd.concat([train_df, oos_df], ignore_index=True)
+    volume_confirm = bool(bt_kwargs.get("volume_confirm", False))
+    volume_lookback = int(bt_kwargs.get("volume_lookback", 20))
+    volume_ratio_min = float(bt_kwargs.get("volume_ratio_min", 1.0))
+    consensus_n_agree = bt_kwargs.get("consensus_n_agree")
+
+    if consensus_n_agree is not None and int(consensus_n_agree) > 1:
+        trend = compute_consensus_trend(
+            context,
+            base_params=params,
+            n_agree=int(consensus_n_agree),
+            volume_confirm=volume_confirm,
+            volume_lookback=volume_lookback,
+            volume_ratio_min=volume_ratio_min,
+        ).reset_index(drop=True)
+    elif params.mode == TrendMode.DONCHIAN_BREAKOUT:
+        trend = compute_donchian_trend(
+            context,
+            entry_window=params.donchian_entry_window,
+            exit_window=params.donchian_exit_window,
+            min_run_len=params.min_run_len,
+        ).reset_index(drop=True)
+        trend = apply_volume_confirmation(
+            trend,
+            enabled=volume_confirm,
+            lookback=volume_lookback,
+            volume_ratio_min=volume_ratio_min,
+        ).reset_index(drop=True)
+    else:
+        trend = compute_dktrend(context, params).reset_index(drop=True)
+        trend = apply_volume_confirmation(
+            trend,
+            enabled=volume_confirm,
+            lookback=volume_lookback,
+            volume_ratio_min=volume_ratio_min,
+        ).reset_index(drop=True)
+
+    return trend.iloc[-len(oos_df):].reset_index(drop=True)
+
+
 def run_walk_forward_optimization(
     symbol: str,
     ohlcv: pd.DataFrame,
@@ -654,6 +701,9 @@ def run_walk_forward_optimization(
     meta_model_type: str = "logistic",
     meta_use_daily_samples: bool = False,
     stability_weighting: bool = False,
+    score_min_trades_per_year: float = 4.0,
+    score_max_trades_per_year: float = 24.0,
+    score_max_drawdown_limit: float = 0.40,
 ) -> dict[str, Any]:
     """Run rolling or expanding WFO and return a JSON-serializable report."""
     code = str(symbol).strip().zfill(6)
@@ -701,7 +751,13 @@ def run_walk_forward_optimization(
                 initial_capital=initial_capital,
                 **{k: v for k, v in bt.items() if k in _VALID_BT_KWARGS},
             )
-            score = _composite_score(res, train_days=train_days)
+            score = _composite_score(
+                res,
+                train_days=train_days,
+                min_trades_per_year=float(score_min_trades_per_year),
+                max_trades_per_year=float(score_max_trades_per_year),
+                max_drawdown_limit=float(score_max_drawdown_limit),
+            )
             is_scores.append(float(score))
             is_returns_list.append(res.daily_returns)
 
@@ -740,12 +796,14 @@ def run_walk_forward_optimization(
             bt_final["meta_label_threshold"] = float(meta_label_threshold)
             bt_final["meta_label_mode"] = str(meta_label_mode)
 
+        oos_trend = _oos_trend_with_warmup(train_df, oos_df, selected, bt_final)
         oos_res = run_single_stock_backtest(
             code,
             oos_df,
             selected,
             cost_bps=cost_bps,
             initial_capital=initial_capital,
+            trend_override=oos_trend,
             **{k: v for k, v in bt_final.items() if k in _VALID_BT_KWARGS},
         )
         panel = compute_performance_panel(
@@ -850,6 +908,9 @@ def run_nested_walk_forward_optimization(
     meta_model_type: str = "logistic",
     meta_use_daily_samples: bool = False,
     stability_weighting: bool = True,
+    score_min_trades_per_year: float = 4.0,
+    score_max_trades_per_year: float = 24.0,
+    score_max_drawdown_limit: float = 0.40,
 ) -> dict[str, Any]:
     """Nested walk-forward optimisation.
 
@@ -915,6 +976,9 @@ def run_nested_walk_forward_optimization(
             meta_model_type=str(meta_model_type),
             meta_use_daily_samples=bool(meta_use_daily_samples),
             stability_weighting=stability_weighting,
+            score_min_trades_per_year=float(score_min_trades_per_year),
+            score_max_trades_per_year=float(score_max_trades_per_year),
+            score_max_drawdown_limit=float(score_max_drawdown_limit),
         )
 
         # Prefer a cross-fold stable parameter centre; fall back to voting when
@@ -964,12 +1028,14 @@ def run_nested_walk_forward_optimization(
             bt_final["meta_model"] = meta_model
             bt_final["meta_label_threshold"] = float(meta_label_threshold)
             bt_final["meta_label_mode"] = str(meta_label_mode)
+        oos_trend = _oos_trend_with_warmup(outer_train_df, outer_oos_df, params, bt_final)
         oos_res = run_single_stock_backtest(
             code,
             outer_oos_df,
             params,
             cost_bps=cost_bps,
             initial_capital=initial_capital,
+            trend_override=oos_trend,
             **{k: v for k, v in bt_final.items() if k in _VALID_BT_KWARGS},
         )
 

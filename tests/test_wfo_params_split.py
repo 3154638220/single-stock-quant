@@ -1,10 +1,14 @@
+import math
+
 import pandas as pd
 
 from src.backtest.wfo import (
     DEFAULT_PARAM_GRID,
     _BT_PARAM_KEYS,
+    _oos_trend_with_warmup,
     _params_with,
     _select_stable_params,
+    _stability,
     normalize_param_grid,
     run_walk_forward_optimization,
 )
@@ -55,6 +59,46 @@ class TestDefaultParamGrid:
         grid = normalize_param_grid({"macd_fast": 12, "macd_slow": [26]})
         assert grid["macd_fast"] == [12]
         assert grid["macd_slow"] == [26]
+
+    def test_stability_accepts_categorical_params(self):
+        result = _stability(
+            [
+                {"params": {"lst_method": "sma", "lst_period": 205}, "is_score": 1.0, "oos_sharpe": 0.2},
+                {"params": {"lst_method": "sma", "lst_period": 250}, "is_score": 0.8, "oos_sharpe": 0.1},
+            ]
+        )
+        assert result["lst_method"]["mode"] == "sma"
+        assert math.isnan(result["lst_method"]["variance"])
+        assert result["lst_period"]["variance"] > 0
+
+    def test_oos_trend_uses_train_rows_as_warmup(self):
+        closes = [10.0, 10.0, 10.0, 10.0, 10.0, 11.0, 12.0, 13.0]
+        df = pd.DataFrame(
+            {
+                "trade_date": pd.date_range("2024-01-01", periods=len(closes)),
+                "open": closes,
+                "high": [c * 1.01 for c in closes],
+                "low": [c * 0.99 for c in closes],
+                "close": closes,
+                "volume": [100.0] * len(closes),
+            }
+        )
+        params = DKTrendParams(
+            mode=TrendMode.EASTMONEY_DKBAR,
+            lst_period=5,
+            lst_method="sma",
+            bar_period=1,
+            bar_method="wma",
+            bar_range_mult=0.0,
+            slope_lookback=1,
+            state_confirm_days=1,
+            hysteresis_pct=0.0,
+        )
+
+        trend = _oos_trend_with_warmup(df.iloc[:5], df.iloc[5:], params, {})
+
+        assert len(trend) == 3
+        assert trend["lst"].notna().any()
 
 
 class TestStableParamSelection:

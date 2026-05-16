@@ -28,6 +28,7 @@ backtest:
   time_stop_min_return: 0.02
   profit_lock_trigger: 0.0
   profit_lock_trailing: 0.0
+  intrapos_dd_limit: 0.06
 
 signal_filter:
   volume_confirm: true

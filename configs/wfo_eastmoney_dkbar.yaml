@@ -21,6 +21,9 @@ trend_signal:
 wfo:
   train_days: 1008
   oos_days: 252
+  min_trades_per_year: 0.5
+  max_trades_per_year: 8
+  max_drawdown_limit: 0.40
   param_grid:
     lst_method: [sma]
     lst_period: [150, 205, 250]
@@ -29,6 +32,7 @@ wfo:
     bar_range_mult: [0.05, 0.10, 0.15]
     state_confirm_days: [2, 3]
     hysteresis_pct: [0.0, 0.003]
+    intrapos_dd_limit: [0.0, 0.06, 0.08, 0.10]
 
 backtest:
   initial_capital: 100000
@@ -40,6 +44,7 @@ backtest:
   time_stop_min_return: 0.02
   profit_lock_trigger: 0.0
   profit_lock_trailing: 0.0
+  intrapos_dd_limit: 0.0
 
 signal_filter:
   volume_confirm: true
