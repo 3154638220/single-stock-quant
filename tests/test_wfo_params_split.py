@@ -3,14 +3,16 @@ import math
 import pandas as pd
 
 from src.backtest.wfo import (
-    DEFAULT_PARAM_GRID,
     _BT_PARAM_KEYS,
+    DEFAULT_PARAM_GRID,
     _oos_trend_with_warmup,
     _params_with,
     _select_stable_params,
     _stability,
+    json_safe,
     normalize_param_grid,
     run_walk_forward_optimization,
+    trade_contribution_metrics,
 )
 from src.indicators import DKTrendParams, TrendMode
 
@@ -99,6 +101,18 @@ class TestDefaultParamGrid:
 
         assert len(trend) == 3
         assert trend["lst"].notna().any()
+
+    def test_json_safe_replaces_non_finite_values(self):
+        result = json_safe({"a": float("nan"), "b": [float("inf"), 1.0]})
+
+        assert result == {"a": None, "b": [None, 1.0]}
+
+    def test_trade_contribution_metrics(self):
+        trades = pd.DataFrame({"return": [-0.02, 0.10, 0.04]})
+        result = trade_contribution_metrics(trades, total_return=0.20)
+
+        assert result["largest_trade_return"] == 0.10
+        assert result["largest_trade_contribution"] == 0.5
 
 
 class TestStableParamSelection:

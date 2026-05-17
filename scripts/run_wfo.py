@@ -14,7 +14,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.backtest.config import build_bt_kwargs
-from src.backtest.wfo import run_nested_walk_forward_optimization, run_walk_forward_optimization
+from src.backtest.wfo import json_safe, run_nested_walk_forward_optimization, run_walk_forward_optimization
 from src.data_fetcher.db_manager import DuckDBManager
 from src.indicators import DKTrendParams, TrendMode
 from src.settings import load_config, project_root
@@ -225,12 +225,13 @@ def main() -> int:
         out_dir.mkdir(parents=True, exist_ok=True)
         path = out_dir / f"{symbol}_wfo_{datetime.now().strftime('%Y%m%d')}.json"
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(result, f, ensure_ascii=False, indent=2)
+            json.dump(json_safe(result), f, ensure_ascii=False, indent=2, allow_nan=False)
         print(f"已写入 {path}")
 
     if args.plot_heatmap:
         import base64
         import io
+
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt

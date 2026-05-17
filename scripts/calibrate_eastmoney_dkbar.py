@@ -126,6 +126,7 @@ def score_backtest_candidate(
 ) -> dict[str, Any]:
     """Return single-stock backtest metrics for one parameter candidate."""
     res = run_single_stock_backtest(symbol, ohlcv, params, **bt_kwargs)
+    largest_trade_return, largest_trade_contribution = trade_contribution_metrics(res.trade_log, res.total_return)
     return {
         "total_return": float(res.total_return),
         "annualized_return": float(res.annualized_return),
@@ -136,24 +137,32 @@ def score_backtest_candidate(
         "n_trades": int(res.n_trades),
         "win_rate": float(res.win_rate),
         "avg_hold_days": float(res.avg_hold_days),
+        "largest_trade_return": largest_trade_return,
+        "largest_trade_contribution": largest_trade_contribution,
     }
+
+
+def trade_contribution_metrics(trade_log: pd.DataFrame, total_return: float) -> tuple[float, float]:
+    """Return the largest positive trade and its share of total strategy return."""
+    if trade_log.empty or "return" not in trade_log:
+        return float("nan"), float("nan")
+    returns = pd.to_numeric(trade_log["return"], errors="coerce").dropna()
+    winners = returns[returns > 0]
+    if winners.empty:
+        return 0.0, float("nan")
+    largest = float(winners.max())
+    total = _finite(total_return)
+    contribution = largest / total if total > 0 else float("nan")
+    return largest, float(contribution)
 
 
 def objective_score(metrics: dict[str, Any], *, sort_by: str) -> float:
     """Score candidates for ranking; anchors are diagnostics unless blended is requested."""
-    ret = _finite(metrics.get("total_return"))
-    ann = _finite(metrics.get("annualized_return"))
-    excess = _finite(metrics.get("excess_annualized_return"))
-    sharpe = _finite(metrics.get("sharpe_ratio"))
-    max_dd = max(_finite(metrics.get("max_drawdown")), 0.0)
+    return_quality = return_quality_score(metrics)
     color_acc = _finite(metrics.get("bar_color_accuracy"))
     lst_mae = max(_finite(metrics.get("lst_mae")), 0.0)
     bar_mae = max(_finite(metrics.get("bar_mae")), 0.0)
     switches = _finite(metrics.get("trend_switches_per_year"))
-    trades = int(metrics.get("n_trades") or 0)
-
-    low_trade_penalty = 0.30 if trades == 0 else (0.15 if trades == 1 else 0.0)
-    return_quality = sharpe + 1.50 * ann + 0.50 * excess + 0.25 * ret - 1.25 * max_dd - low_trade_penalty
     anchor_fit = color_acc - 0.60 * lst_mae - 0.80 * bar_mae
     switch_penalty = max(0.0, abs(switches - 5.0) - 3.0) * 0.03
 
@@ -162,6 +171,33 @@ def objective_score(metrics: dict[str, Any], *, sort_by: str) -> float:
     if sort_by == "blended":
         return return_quality + 0.35 * anchor_fit - switch_penalty
     return return_quality
+
+
+def return_quality_score(metrics: dict[str, Any]) -> float:
+    """Pure trading score: return, drawdown, Calmar, trades, and concentration."""
+    ret = _finite(metrics.get("total_return"))
+    ann = _finite(metrics.get("annualized_return"))
+    excess = _finite(metrics.get("excess_annualized_return"))
+    sharpe = _finite(metrics.get("sharpe_ratio"))
+    max_dd = max(_finite(metrics.get("max_drawdown")), 0.0)
+    calmar = _finite(metrics.get("calmar_ratio"))
+    contribution = _finite(metrics.get("largest_trade_contribution"), default=float("nan"))
+    trades = int(metrics.get("n_trades") or 0)
+
+    low_trade_penalty = 0.30 if trades == 0 else (0.15 if trades == 1 else 0.05 if trades < 4 else 0.0)
+    trade_bonus = min(max(trades, 0), 20) / 20.0 * 0.15
+    concentration_penalty = max(0.0, contribution - 0.60) * 0.75 if pd.notna(contribution) else 0.0
+    return (
+        sharpe
+        + 1.50 * ann
+        + 0.50 * excess
+        + 0.25 * ret
+        + 0.20 * calmar
+        + trade_bonus
+        - 1.25 * max_dd
+        - low_trade_penalty
+        - concentration_penalty
+    )
 
 
 def _safe_mean(series: pd.Series) -> float:
@@ -315,6 +351,7 @@ def main() -> int:
         metrics, detail = score_candidate(df, anchors, params, label=label)
         if not args.no_backtest:
             metrics.update(score_backtest_candidate(symbol, df, params, bt_kwargs))
+            metrics["return_quality"] = return_quality_score(metrics)
         metrics["objective_score"] = objective_score(metrics, sort_by=args.sort_by)
         rows.append(metrics)
         detail.insert(0, "label", label)

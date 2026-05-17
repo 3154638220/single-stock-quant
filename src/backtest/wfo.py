@@ -91,6 +91,37 @@ def _param_combinations(grid: dict[str, list[Any]]) -> list[dict[str, Any]]:
     return [dict(zip(keys, values)) for values in product(*(grid[k] for k in keys))]
 
 
+def json_safe(value: Any) -> Any:
+    """Return a strict-JSON-safe copy with NaN/inf converted to null."""
+    if isinstance(value, dict):
+        return {str(k): json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_safe(v) for v in value]
+    if isinstance(value, np.generic):
+        return json_safe(value.item())
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+    if isinstance(value, float):
+        return value if np.isfinite(value) else None
+    return value
+
+
+def trade_contribution_metrics(trade_log: pd.DataFrame, total_return: float) -> dict[str, float]:
+    """Largest winning trade and its share of total strategy return."""
+    if trade_log.empty or "return" not in trade_log:
+        return {"largest_trade_return": float("nan"), "largest_trade_contribution": float("nan")}
+    returns = pd.to_numeric(trade_log["return"], errors="coerce").dropna()
+    winners = returns[returns > 0]
+    if winners.empty:
+        return {"largest_trade_return": 0.0, "largest_trade_contribution": float("nan")}
+    largest = float(winners.max())
+    total = float(total_return) if np.isfinite(total_return) else float("nan")
+    return {
+        "largest_trade_return": largest,
+        "largest_trade_contribution": largest / total if total > 0 else float("nan"),
+    }
+
+
 def normalize_param_grid(raw: dict[str, Any] | None) -> dict[str, list[Any]]:
     """Return a clean parameter grid, falling back to defaults when no grid is configured."""
     if not raw:
@@ -818,6 +849,12 @@ def run_walk_forward_optimization(
                 "fold": fold,
                 "start": pd.Timestamp(oos_df["trade_date"].iloc[0]).date().isoformat(),
                 "end": pd.Timestamp(oos_df["trade_date"].iloc[-1]).date().isoformat(),
+                "total_return": float(oos_res.total_return),
+                "annualized_return": float(oos_res.annualized_return),
+                "max_drawdown": float(oos_res.max_drawdown),
+                "calmar_ratio": float(oos_res.calmar_ratio),
+                "n_trades": int(oos_res.n_trades),
+                **trade_contribution_metrics(oos_res.trade_log, oos_res.total_return),
             }
         )
         oos_panel_dicts.append(oos_panel)
@@ -1039,10 +1076,6 @@ def run_nested_walk_forward_optimization(
             **{k: v for k, v in bt_final.items() if k in _VALID_BT_KWARGS},
         )
 
-        panel = compute_performance_panel(
-            oos_res.daily_returns.to_numpy(dtype=np.float64),
-            n_concurrent_strategies=len(combos),
-        )
         oos_returns.append(oos_res.daily_returns)
 
         outer_fold_results.append({
@@ -1059,6 +1092,7 @@ def run_nested_walk_forward_optimization(
             "oos_calmar": oos_res.calmar_ratio,
             "oos_max_drawdown": oos_res.max_drawdown,
             "oos_n_trades": oos_res.n_trades,
+            **{f"oos_{k}": v for k, v in trade_contribution_metrics(oos_res.trade_log, oos_res.total_return).items()},
         })
 
         inner_wfo_summaries.append({
