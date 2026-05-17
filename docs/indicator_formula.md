@@ -1,6 +1,7 @@
 # DK Trend Indicator
 
-This project approximates Eastmoney's private long/short trend display with three transparent rules.
+This project uses transparent trend rules for single-stock trading research and backtesting.
+It does not try to replicate Eastmoney's proprietary long/short trend curve.
 
 ## `macd_cross`
 
@@ -23,6 +24,13 @@ dk_value = EMA(MA(close, 5) - MA(close, 20), 3)
 ```text
 dk_value = close - MA(close, 20)
 ```
+
+## `eastmoney_dkbar`
+
+`eastmoney_dkbar` is a legacy mode name retained for compatibility. In the
+current project it means a DKBar-style trading signal family with separate
+visual bar fields and trading `trend_state`; it is not a target for official
+indicator replication.
 
 For all modes:
 

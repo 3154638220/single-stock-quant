@@ -1,60 +1,22 @@
 <claude-mem-context>
 # Memory Context
 
-# [single-stock-quant] recent context, 2026-05-16 9:52pm GMT+8
+# [single-stock-quant] recent context, 2026-05-17 10:03pm GMT+8
 
 Legend: 🎯session 🔴bugfix 🟣feature 🔄refactor ✅change 🔵discovery ⚖️decision 🚨security_alert 🔐security_note
 Format: ID TIME TYPE TITLE
 Fetch details: get_observations([IDs]) | Search: mem-search skill
 
-Stats: 50 obs (11,342t read) | 208,869t work | 95% savings
+Stats: 50 obs (9,604t read) | 1,657,537t work | 99% savings
 
 ### May 15, 2026
-S44 User provided 6 Eastmoney screenshot anchor points for stock 000783 — calibration revealed bar_color ≠ trade_state, leading to architectural pivot and full implementation of bar_color/trend_state split across the codebase (May 15, 9:22 PM)
-S45 User provided 6 Eastmoney screenshot anchor points for stock 000783 — calibration disproved the bar_color=trade_state hypothesis, leading to an architectural split of visual bar_color from trading trend_state, with full implementation across code/configs/tests/docs (May 15, 9:23 PM)
-S46 Claude clarified to user: the Eastmoney DK bar indicator has NOT been successfully replicated — only the engineering framework was corrected (bar_color/trend_state split), and the actual indicator reverse-engineering is still unsolved (May 15, 9:23 PM)
-S47 User asked if there's a next-phase plan — Claude confirmed the plan document has direction (bar_color/trend_state split done, need to optimize each independently) but lacks a detailed executable task list (May 15, 9:24 PM)
-S48 User provided 6 Eastmoney screenshot anchor points for stock 000783 (dates, LST, BARHIGH, BARLOW, color) — Claude calibrated the DK bar indicator against them, discovered the bar_color ≠ trade_state hypothesis was fundamentally wrong, made an architectural pivot, and fully implemented the bar_color/trend_state split across code, configs, tests, and documentation (May 15, 9:24 PM)
-S49 Advance plan-05-15(2).md: Implement E21 (anchor calibration dataset solidification) and E22 (bar_color state machine reverse-engineering) for Eastmoney DK Trend replication on stock 000783 (May 15, 9:30 PM)
-S50 Advance plan-05-15(2).md: Implement E21 (anchor calibration dataset solidification) and E22 (bar_color state machine reverse-engineering) for Eastmoney DK Trend replication on stock 000783, then run grid search to discover optimal parameters (May 15, 9:43 PM)
 S51 Advance plan-05-15(2).md through E21 and E22 implementation, then pivot strategy from anchor-first to return-first calibration for Eastmoney DK Trend reverse-engineering on stock 000783 (May 15, 9:53 PM)
 S52 诊断000783长江证券DK趋势背测问题：5笔交易总收益+20.61%但依赖单笔大赢家，分析入场信号、退出机制、参数稳定性 (May 15, 9:54 PM)
 ### May 16, 2026
-S53 诊断000783长江证券DK趋势背测：5笔交易总收益+20.61%但依赖单笔大赢家，分析入场信号滞后、退出保护缺失、参数稳定性不足三大问题 (May 16, 8:46 PM)
-595 9:12p 🔴 Fix in progress: _stability np.float64 crash on string params replaced with pd.to_numeric
-596 9:13p 🔴 _stability string crash fixed and composite score constraints made configurable
-597 " 🔴 WFO config loosened for low-frequency DK Bar strategy: trades/year 0.5-8, max drawdown 40%
-598 " 🟣 Test added for _stability categorical parameter handling: test_stability_accepts_categorical_params
-599 9:14p 🔵 All 17 tests pass after _stability fix; WFO run for 000783 DK Bar in progress
-600 " 🔵 WFO 000783 DK Bar run still computing — 576 param combos × multiple folds expected to be long-running
-601 " 🔵 WFO 000783 DK Bar: ~55 seconds elapsed, still computing with no output — 576 combos processing
-602 " 🔵 WFO 000783 DK Bar completed but produced zero trades — all metrics NaN/zero across 2 folds
-603 9:15p 🔵 DK Bar WFO 000783: In-sample trades exist but OOS generates zero trades across all 576 combos
-604 9:17p 🔵 DK Bar trend mode: compute_dktrend delegates to _compute_eastmoney_dkbar when mode is EASTMONEY_DKBAR
-605 " 🟣 OOS backtest now uses train-warmed trend override to prevent cold-start zero-trade issue
-606 " 🟣 Test added for _oos_trend_with_warmup: test_oos_trend_uses_train_rows_as_warmup
-607 9:18p 🔵 All 11 tests in test_wfo_params_split.py pass including new warmup test; WFO 000783 DK Bar re-run launched
-608 " 🔵 WFO 000783 re-run with warmup fix: ~40 seconds elapsed, still computing 576 combos × 2 folds
-609 " 🔵 WFO 000783 re-run: ~65 seconds into computation, still processing — expected for 1152 backtests
-610 9:19p 🔵 WFO 000783 re-run: ~75 seconds elapsed, prior run completed at this time — results imminent
-611 " 🔴 WFO 000783 DK Bar warmup fix confirmed: OOS now produces 29.57% return, Sharpe 0.94, MDD 10.84%
-612 " 🔵 Full-sample 000783 DK Bar backtest: 5 trades, +30.17% total, Sharpe 0.52, avg hold 45 days
-613 9:20p ✅ WFO 000783 DK Bar re-run with --export-results launched; single backtest confirmed 5 trades across full period
-614 " 🔵 WFO 000783 with --export-results: ~50 seconds elapsed, still computing — expected for 576 combos × 2 folds
-615 " 🔵 WFO 000783 export run: ~65 seconds elapsed, still processing — results imminent based on prior ~85-90s runtime
-616 9:21p 🔵 WFO 000783 export run: ~75 seconds elapsed, approaching prior completion time of ~88 seconds
-617 " 🔵 WFO 000783 export run: ~85 seconds elapsed — results expected any moment now
-618 " ✅ WFO 000783 DK Bar exported: results JSON written to data/output/000783_wfo_20260516.json
-619 9:22p ✅ Full DK Bar grid search launched: calibrate_eastmoney_dkbar.py for 000783 with --grid-search --sort-by return_quality
-620 " 🔵 Grid search calibrate_eastmoney_dkbar.py for 000783: ~30 seconds elapsed, still computing full parameter space
-621 " 🔵 Grid search confirms WFO-selected params: sma205_wma5_c3_h0 ranks #1 by return_quality with 30.17% return
-622 9:23p 🔵 Full test suite passes 100% — all changes backward-compatible across 5 modified files
-623 9:41p 🟣 WFO 字符串参数稳定性统计修复完成
-624 " 🟣 退出层峰值保护和 ATR trailing 止损语义补齐并加测试
-625 " ✅ 000783 对照回测与 DK WFO 验证重跑完成
+S53 诊断000783长江证券DK趋势背测：5笔交易总收益+20.61%但依赖单笔大赢家，分析入场信号滞后、退出保护缺失、参数稳定性不足三大问题 (May 16, 8:44 PM)
+S54 DK策略WFO修复、退出层增强、跨股验证及计划文档同步——从单股优化阶段转入标的适配阶段 (May 16, 8:46 PM)
 626 9:42p ✅ 计划文档同步更新：intrapos_dd_limit=0.06 显著提升回测表现
 627 " ⚖️ intrapos_dd_limit=0.06 成为回测配置的标准风控参数
-628 " 🔵 WFO OOS warmup 修复使长均线策略的 OOS 评估变得可靠
 629 9:43p ✅ 计划文档完成最终同步：E24/E25 里程碑更新，下一步进入 5 股小样本验证
 630 " 🔵 Trade 3 具体修复：intrapos_dd_stop 将 -1.13% 扭转为 +6.71%
 631 9:44p 🔵 跨股 WFO 验证启动：600030 运行中，600036 因 DuckDB 锁冲突失败
@@ -71,6 +33,45 @@ S53 诊断000783长江证券DK趋势背测：5笔交易总收益+20.61%但依赖
 642 9:51p 🔵 跨股WFO汇总分析：6只股票仅000783通过，300750两个fold参数完全相同
 643 " ⚖️ 跨股WFO验证结论：DK策略不具备跨股泛化能力，不能进入25股扩展
 644 " ✅ 计划文档全面更新完成：跨股WFO结果、小样本汇总表、E25方向调整全部写入
+645 9:52p ⚖️ 本轮工作会话完成：7个文件修改，224行新增，DK策略从单股优化转向标的适配阶段
+S55 用户请求全面分析 single-stock-quant 量化交易项目存在的问题和需要改进的地方 (May 16, 9:53 PM)
+### May 17, 2026
+646 9:37p 🔵 项目分析任务启动：single-stock-quant 仓库审查
+647 " 🔵 single-stock-quant 项目结构梳理完成
+648 9:38p 🔵 DK 趋势指标复刻状态：核心问题是从视觉逆向转向收益优先的工程重构
+649 " 🔵 长江证券 (000783) WFO 深度分析揭示策略收益集中度过高和低价股摩擦成本问题
+650 " 🔵 000783 DK Bar 收益率网格校准输出 252 个参数组合，存在大量负收益候选
+651 " 🔵 data/output 目录积累了跨 15+ 股票的 WFO 结果和多种格式输出，缺乏清理和组织
+652 " 🔵 项目配置管理体系复杂：20+ YAML 文件覆盖策略变体、WFO 阶段和生产环境
+653 " 🔵 文档归档体系混乱：plan 文件散布在 docs/ 和 docs/archive/ 中，文件名含括号导致 shell 兼容问题
+654 9:41p 🔵 2026-05-16 最新 WFO 结果确认：仅 2/6 只标的 Sharpe 为正，泛化能力严重不足
+655 " 🔵 生产环境配置 prod-v1 仅使用 4 只 WFO 通过的标的，Meta-label 因 600030 上劣化被禁用
+656 " 🔵 calibrate_eastmoney_dkbar.py 的 objective_score 公式权重硬编码且缺乏校准依据
+657 " 🔵 persistent_price_change 颜色状态机在纯 Python 循环中逐行计算，性能瓶颈明显
+658 " 🔵 README 文档严重过时——仅描述 macd_cross/ma_cross/boll_trend 三种模式，未提及 eastmoney_dkbar
+659 " 🔵 回测引擎积累了 7 层退出机制和 5 层仓位缩放，复杂度已接近生产系统但缺乏集成测试覆盖
+660 " 🔵 test_dktrend.py 和 test_eastmoney_anchor_scoring.py 验证了 bar_color/trend_state 拆分和锚点加载的基础逻辑
+661 9:43p 🔵 代码质量扫描：ruff 发现 43 个问题（30 个可自动修复），mypy 发现 13 个类型错误
+662 " 🔵 WFO JSON 输出存在 NaN 序列化问题——heatmap 数据包含大量 NaN 值
+663 " 🔵 000783 DK WFO 的参数选择揭示了 platform 机制的实际效果：两个 Fold 均未选峰值
+S56 系统化更新项目目标表述和文档措辞：将项目从"东财指标复刻"重新定位为"单股量化交易系统" (May 17, 9:45 PM)
+664 9:48p 🔵 新任务启动：系统化更新项目目标表述和文档措辞
+665 " 🔵 全项目"复刻/东财"关键词搜索揭示目标表述散布在 30+ 个文件中
+666 " 🔵 docs/indicator_formula.md 和 configs/README.md 同样过时——仅覆盖 3 种基本模式，未提及 EASTMONEY_DKBAR
+667 9:49p ✅ README.md 已更新：修正"Eastmoney-style"误导性表述，明确项目目标为单股交易验证
+668 " ✅ docs/indicator_formula.md 已更新：移除"approximates Eastmoney"的误导性声明，新增 eastmoney_dkbar 章节
+669 9:50p ✅ docs/plan-05-15(2).md 已完全重写：从"DK Trend 复刻计划"转为"单股量化交易计划"
+670 " ✅ src/indicators/dktrend.py 模块文档字符串和注释已更新以反映新目标
+671 " ✅ calibrate_eastmoney_dkbar.py 和 plot_dktrend.py 的文档字符串和图表标题已更新
+672 " ✅ DK Bar 配置文件（eastmoney_dkbar_test.yaml、wfo_eastmoney_dkbar.yaml）添加研究性质声明头注释
+S57 完成项目目标表述和文档措辞的系统化更新：将 single-stock-quant 从"东财指标复刻"重新定位为"单股量化交易系统"，涵盖 10 个文件的修改 (May 17, 9:51 PM)
+S58 session 完成了两阶段工作：(1) 全面分析 single-stock-quant 项目的问题和改进方向；(2) 系统化更新项目文档将定位从"东财指标复刻"改为"单股量化交易系统" (May 17, 9:52 PM)
+S59 用户请求Codex重构最新的plan文件，目标单一：提升单股量化收益 (May 17, 9:53 PM)
+S60 用户请求Codex重构最新的plan文件（docs/plan-05-15(2).md），目标单一：提升单股量化收益 (May 17, 10:01 PM)
+673 10:02p 🔵 000783 DK Bar参数网格搜索结果：最优配置为sma205_wma5组合
+674 " 🔵 000783 WFO两折OOS结果：跨折Sharpe波动极大，Bootstrap置信区间极宽
+675 " 🔵 数据输出目录包含丰富的跨股票WFO和多模式回测结果
+676 " 🔄 plan-05-15(2).md 全面重构为单一目标：提升000783单股量化收益
 
-Access 209k tokens of past work via get_observations([IDs]) or mem-search skill.
+Access 1658k tokens of past work via get_observations([IDs]) or mem-search skill.
 </claude-mem-context>

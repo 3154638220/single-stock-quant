@@ -1,4 +1,4 @@
-"""Approximate Eastmoney-style long/short trend indicator."""
+"""Trend indicators for single-stock timing strategies."""
 
 from __future__ import annotations
 
@@ -35,7 +35,8 @@ class DKTrendParams:
     min_run_len: int = 1
     donchian_entry_window: int = 20
     donchian_exit_window: int = 10
-    # Eastmoney-style DK bar replication params
+    # DKBar-style trading signal params. The legacy mode name is kept for
+    # compatibility; this project does not target official indicator replication.
     lst_period: int = 180
     lst_method: str = "ema"
     bar_period: int = 10

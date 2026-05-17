@@ -1,6 +1,8 @@
 # single-stock-quant
 
-This repository is a local A-share single-stock trend timing system. It stores daily OHLCV data in DuckDB, computes an Eastmoney-style long/short trend approximation, prints buy/sell state changes, and runs T+1 open single-stock backtests.
+This repository is a local A-share single-stock quantitative trading system. It stores daily OHLCV data in DuckDB, computes configurable trend-timing signals, prints buy/sell state changes, and runs T+1 open single-stock backtests.
+
+The project goal is single-stock trading validation and execution support. It no longer targets replication of Eastmoney's proprietary long/short trend curve. Legacy names such as `eastmoney_dkbar` are kept only for backward compatibility with existing configs, outputs, and tests; they should be treated as DKBar-style trading signals, not official indicator replicas.
 
 ## Quick Start
 
@@ -36,6 +38,7 @@ cp /path/to/a_share_stock_names.csv data/stock_names.csv
 | `macd_cross` | `EMA(12)-EMA(26)` crosses its 9-day signal | default, lower turnover |
 | `ma_cross` | smoothed `MA5-MA20` | simple trend confirmation |
 | `boll_trend` | close above/below MA20 | simplest baseline |
+| `eastmoney_dkbar` | DKBar-style low-frequency trend state | trading research only; not an official replica |
 
 Signals are emitted only when the color changes:
 

@@ -2,6 +2,10 @@
 
 The active configuration template is the repository root `config.yaml.example`.
 
+The project goal is single-stock trading. Configs with legacy names such as
+`eastmoney_dkbar` are research configs for DKBar-style trading signals; they are
+not Eastmoney indicator replication targets.
+
 The key section is `trend_signal`:
 
 ```yaml

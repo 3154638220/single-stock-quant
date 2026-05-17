@@ -205,7 +205,7 @@ def _plot_eastmoney_dkbar(trend: pd.DataFrame, *, title: str, mode: str, output_
         constrained_layout=True,
     )
     display_title = title if has_cjk else _ascii_fallback(title)
-    ax_price.set_title(f"{display_title} Eastmoney DK Bar ({mode})")
+    ax_price.set_title(f"{display_title} DKBar Trading Signal ({mode})")
     ax_price.plot(plot_df["trade_date"], plot_df["close"], color="#1f2937", linewidth=1.0, alpha=0.75, label="Close")
     ax_price.plot(plot_df["trade_date"], plot_df["lst"], color="#f59e0b", linewidth=1.6, label="LST")
 

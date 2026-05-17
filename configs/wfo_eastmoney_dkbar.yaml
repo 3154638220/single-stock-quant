@@ -1,3 +1,7 @@
+# WFO research config for a DKBar-style single-stock trading signal.
+# The legacy filename/mode are kept for compatibility; this is not an
+# Eastmoney official-indicator replication target.
+
 paths:
   duckdb_path: data/market.duckdb
   output_dir: data/output

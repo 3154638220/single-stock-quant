@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Score Eastmoney DK bar candidates against manually captured anchors."""
+"""Score DKBar-style trading candidates with legacy anchor diagnostics."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ REQUIRED_ANCHOR_COLUMNS = {"symbol", "date", "lst", "bar_high", "bar_low", "bar_
 
 
 def load_anchors(path: str | Path, *, symbol: str | None = None) -> pd.DataFrame:
-    """Load and validate Eastmoney DK bar anchor rows."""
+    """Load and validate legacy DKBar anchor rows."""
     anchor_path = Path(path).expanduser()
     if not anchor_path.is_absolute():
         anchor_path = project_root() / anchor_path
@@ -269,7 +269,7 @@ def _read_ohlcv(symbol: str, start: str | None, end: str | None, config: str | N
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Score Eastmoney DK bar candidates by returns with anchor diagnostics.")
+    parser = argparse.ArgumentParser(description="Score DKBar-style trading candidates by returns with anchor diagnostics.")
     parser.add_argument("--symbol", default="000783")
     parser.add_argument("--anchors", default="data/anchors/eastmoney_dkbar_000783.csv")
     parser.add_argument("--config", default="configs/eastmoney_dkbar_test.yaml")
