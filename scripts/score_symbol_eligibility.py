@@ -101,6 +101,20 @@ def _liquidity_score(df: pd.DataFrame) -> tuple[float, float]:
         return 0.1, avg_daily
 
 
+def _volume_profile(df: pd.DataFrame) -> tuple[float, float]:
+    """Return volume coefficient of variation and suggested volume gate."""
+    if "volume" not in df.columns:
+        return 0.0, 1.0
+    volume = pd.to_numeric(df["volume"], errors="coerce").replace(0.0, np.nan).dropna()
+    if len(volume) < 20:
+        return 0.0, 1.0
+    mean = float(volume.mean())
+    std = float(volume.std(ddof=0))
+    cv = std / mean if mean > 0 else 0.0
+    suggested = 1.0 + cv * 0.3
+    return float(cv), float(np.clip(suggested, 1.0, 1.8))
+
+
 def _rolling_sharpe_score(
     symbol: str,
     df: pd.DataFrame,
@@ -186,6 +200,7 @@ def main() -> int:
         tq = _trend_quality_score(df, params)
         sf, annual_sig = _signal_frequency_score(df, params)
         liq, avg_amt = _liquidity_score(df)
+        volume_cv, suggested_volume_ratio_min = _volume_profile(df)
         rs, sharpes = _rolling_sharpe_score(symbol, df, params, kwargs)
 
         total = 0.30 * tq + 0.40 * rs + 0.15 * sf + 0.15 * liq
@@ -205,13 +220,16 @@ def main() -> int:
             "annual_signals": round(annual_sig, 1),
             "liquidity_score": round(liq, 3),
             "avg_daily_amount": round(avg_amt, 0),
+            "volume_cv": round(volume_cv, 3),
+            "suggested_volume_ratio_min": round(suggested_volume_ratio_min, 2),
             "rolling_sharpes": ",".join(f"{s:.2f}" for s in sharpes),
             "total_score": round(total * 100, 1),
             "grade": grade,
         })
 
         print(f"  {symbol} ({names.get(symbol, symbol)}): score={total*100:.0f}, grade={grade}, "
-              f"tq={tq:.2f}, rs={rs:.2f}, sf={sf:.2f}, liq={liq:.2f}")
+              f"tq={tq:.2f}, rs={rs:.2f}, sf={sf:.2f}, liq={liq:.2f}, "
+              f"vol_cv={volume_cv:.2f}, vol_min={suggested_volume_ratio_min:.2f}")
 
     out_path = Path(args.output).expanduser()
     out_path.parent.mkdir(parents=True, exist_ok=True)

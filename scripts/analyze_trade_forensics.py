@@ -68,6 +68,7 @@ def _trade_mfe_mae(trade: pd.Series, ohlcv: pd.DataFrame) -> dict:
     return {
         "mfe": mfe, "mae": mae,
         "exit_efficiency": exit_eff,
+        "mfe_utilization": exit_eff,
         "time_to_mfe": time_to_mfe,
         "mfe_mae_ratio": mfe_mae,
     }
@@ -181,6 +182,7 @@ def main() -> int:
                 "mfe": mfe_mae["mfe"],
                 "mae": mfe_mae["mae"],
                 "exit_efficiency": mfe_mae["exit_efficiency"],
+                "mfe_utilization": mfe_mae["mfe_utilization"],
                 "time_to_mfe": mfe_mae["time_to_mfe"],
                 "mfe_mae_ratio": mfe_mae["mfe_mae_ratio"],
                 "dk_peak_to_exit_days": dk_dyn["dk_peak_to_exit_days"],
@@ -189,8 +191,13 @@ def main() -> int:
                 "dk_value_at_exit": dk_dyn["dk_value_at_exit"],
             })
 
-        med_eff = float(np.nanmedian([t["exit_efficiency"] for t in all_trades[-len(res.trade_log):] if np.isfinite(t["exit_efficiency"])]))
-        med_mfe_mae = float(np.nanmedian([t["mfe_mae_ratio"] for t in all_trades[-len(res.trade_log):] if np.isfinite(t["mfe_mae_ratio"])]))
+        recent_trades = all_trades[-len(res.trade_log):]
+        valid_util = [t["mfe_utilization"] for t in recent_trades if np.isfinite(t["mfe_utilization"])]
+        med_eff = float(np.nanmedian(valid_util)) if valid_util else float("nan")
+        valid_mfe_mae = [t["mfe_mae_ratio"] for t in recent_trades if np.isfinite(t["mfe_mae_ratio"])]
+        med_mfe_mae = float(np.nanmedian(valid_mfe_mae)) if valid_mfe_mae else float("nan")
+        p25_eff = float(np.nanpercentile(valid_util, 25)) if valid_util else float("nan")
+        p75_eff = float(np.nanpercentile(valid_util, 75)) if valid_util else float("nan")
         symbol_stats.append({
             "symbol": symbol,
             "stock_name": names.get(symbol, symbol),
@@ -198,6 +205,9 @@ def main() -> int:
             "sharpe": res.sharpe_ratio,
             "mdd": res.max_drawdown,
             "median_exit_efficiency": med_eff,
+            "mfe_utilization_p25": p25_eff,
+            "mfe_utilization_p50": med_eff,
+            "mfe_utilization_p75": p75_eff,
             "median_mfe_mae": med_mfe_mae,
         })
         print(f"  {symbol} ({names.get(symbol, symbol)}): {res.n_trades} trades, "
@@ -227,6 +237,12 @@ def main() -> int:
         print(f"Median MFE:              {_format_pct(valid['mfe'].median())}")
         print(f"Median MAE:              {_format_pct(valid['mae'].median())}")
         print(f"Median Exit Efficiency:  {valid['exit_efficiency'].median():.2f}")
+        print(
+            "MFE Utilization P25/P50/P75: "
+            f"{valid['mfe_utilization'].quantile(0.25):.2f} / "
+            f"{valid['mfe_utilization'].median():.2f} / "
+            f"{valid['mfe_utilization'].quantile(0.75):.2f}"
+        )
         print(f"Mean Exit Efficiency:    {valid['exit_efficiency'].mean():.2f}")
         print(f"Median MFE/MAE Ratio:    {valid['mfe_mae_ratio'].median():.1f}")
         print(f"Median Time to MFE:      {valid['time_to_mfe'].median():.0f} days")
@@ -238,7 +254,7 @@ def main() -> int:
         # DK lag breakdown
         dk_lag = valid["dk_peak_to_exit_days"].dropna()
         if not dk_lag.empty:
-            print(f"\nDK peak→exit lag distribution:")
+            print("\nDK peak→exit lag distribution:")
             for bin_label, (lo, hi) in [(" 0-5d", (0, 5)), (" 6-10d", (6, 10)),
                                           ("11-15d", (11, 15)), ("16-20d", (16, 20)),
                                           ("21-30d", (21, 30)), ("31d+", (31, 999))]:
@@ -246,7 +262,7 @@ def main() -> int:
                 print(f"  {bin_label}: {count:>4} ({count/len(dk_lag)*100:.0f}%)")
 
         # Exit reason breakdown
-        print(f"\nExit Efficiency by exit reason:")
+        print("\nExit Efficiency by exit reason:")
         for reason in valid["exit_reason"].unique():
             sub = valid[valid["exit_reason"] == reason]
             print(f"  {reason:<16}: n={len(sub):>4}, median eff={sub['exit_efficiency'].median():.2f}")

@@ -1,9 +1,6 @@
-# WFO: stable config — only optimize MACD params, fix exit params
-# Action 5 Solution A: reduces overfitting by keeping profit_lock params out of the grid
-#
-# Rationale: profit_lock_trigger=0.08 / profit_lock_trailing=0.04 were picked
-# from IS full-sample experiments. Putting them back in the WFO grid means
-# each fold re-optimizes them, compounding IS overfit.
+# WFO: stable return-quality config.
+# 2026-05-18 plan baseline: 2y train + 6m OOS to lift fold count from ~3 to
+# 6-8 on symbols with 2020+ daily data, with a widened MACD/exit grid.
 
 backtest:
   stop_loss_pct: 0.08
@@ -16,7 +13,19 @@ signal_filter:
   volume_confirm: true
 
 wfo:
+  train_days: 504
+  oos_days: 126
+  step_days: 126
+  min_trades_per_year: 2.0
+  max_trades_per_year: 30.0
+  max_drawdown_limit: 0.35
+  n_jobs: 4
   param_grid:
-    macd_fast: [10, 12, 14]
-    macd_signal: [8, 9, 10]
-  # 3^2 = 9 combinations (vs 81 in s_final_wfo)
+    macd_fast: [8, 10, 12, 14]
+    macd_slow: [22, 26, 30]
+    macd_signal: [7, 8, 9, 10]
+    min_run_len: [1, 2]
+    profit_lock_trigger: [0.10, 0.12, 0.15]
+    profit_lock_trailing: [0.04, 0.05, 0.06]
+    dk_fade_exit_n: [0, 2, 3, 5]
+  # 4×3×4×2×3×3×4 = 3456 combinations; use for final verification.

@@ -13,7 +13,6 @@ Stage 23 improvements:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -105,6 +104,7 @@ def build_signal_features(
         .rolling(120, min_periods=60)
         .apply(lambda x: (x.iloc[-1] >= x).mean(), raw=False)
     )
+    out["atr_normalized_entry_risk"] = out["atr_pct"] / (out["atr_pct_rank"] + 0.01)
     # ATR expansion: short-term vol / long-term vol
     atr60 = tr.rolling(60, min_periods=60).mean()
     out["atr_expansion"] = (atr / atr60).fillna(1.0)
@@ -122,6 +122,7 @@ def build_signal_features(
     out["stock_ret_60"] = stock_ret_60
     stock_daily_ret = close.pct_change(fill_method=None)
     index_daily_ret = pd.Series(0.0, index=df.index, dtype=np.float64)
+    out["market_vol_20"] = 0.0
     if index_ohlcv is not None and not index_ohlcv.empty:
         idx_close = pd.to_numeric(index_ohlcv["close"], errors="coerce")
         idx_dates = pd.to_datetime(index_ohlcv["trade_date"]).dt.normalize()
@@ -138,6 +139,13 @@ def build_signal_features(
             index=df.index,
             dtype=np.float64,
         )
+        idx_vol20 = idx_close.pct_change(fill_method=None).rolling(20, min_periods=10).std() * np.sqrt(252)
+        idx_vol_map = dict(zip(idx_dates, idx_vol20))
+        out["market_vol_20"] = pd.Series(
+            [idx_vol_map.get(d, 0.0) for d in stock_dates],
+            index=df.index,
+            dtype=np.float64,
+        )
     else:
         out["rs_60"] = stock_ret_60
 
@@ -145,6 +153,7 @@ def build_signal_features(
     out["industry_rs_20"] = compute_industry_rs_20(
         df, index_ohlcv=index_ohlcv,
     )
+    out["sector_rs_20"] = out["industry_rs_20"]
 
     # Phase 11 feature set: longer-horizon price location, price/volume
     # behaviour, trend consistency, acceleration, and benchmark sensitivity.
@@ -227,6 +236,8 @@ def build_signal_features(
             index=df.index,
             dtype=np.float64,
         )
+        trend_age_mean = out["dk_run_len"].where(out["dk_run_len"] > 0).rolling(60, min_periods=20).mean()
+        out["trend_age_ratio"] = out["dk_run_len"] / trend_age_mean.replace(0.0, np.nan)
         dk_color_map = dict(zip(dk["trade_date"], dk["dk_color"]))
         out["dk_is_red"] = pd.Series(
             [1.0 if str(dk_color_map.get(d, "")).lower() == "red" else 0.0 for d in stock_dates],
@@ -271,8 +282,11 @@ def build_signal_features(
     else:
         out["dk_run_len"] = -1.0
         out["dk_is_red"] = 0.0
+        out["trend_age_ratio"] = 0.0
         out["dk_value_pct_rank"] = 0.5
-        out["stock_trend_quality"] = 0.0
+        ret_mean = stock_daily_ret.rolling(20, min_periods=10).mean()
+        ret_std = stock_daily_ret.rolling(20, min_periods=10).std()
+        out["stock_trend_quality"] = (ret_mean.abs() / ret_std.replace(0.0, np.nan)).fillna(0.0)
         out["signal_recency"] = -1.0
 
     return out
@@ -284,12 +298,15 @@ FEATURE_COLUMNS = [
     "close_above_ma60",
     "atr_pct",
     "atr_pct_rank",
+    "atr_normalized_entry_risk",
     "atr_expansion",
     "volume_ratio_20",
     "donchian_20_breakout",
     "stock_ret_60",
     "rs_60",
     "industry_rs_20",
+    "sector_rs_20",
+    "market_vol_20",
     "pos_52w",
     "macd_hist_dir",
     "turnover_rank_60",
@@ -304,6 +321,7 @@ FEATURE_COLUMNS = [
     "volume_trend",
     "dk_run_len",
     "dk_is_red",
+    "trend_age_ratio",
     "stock_trend_quality",
     "holding_regime",
     "signal_recency",
@@ -334,6 +352,8 @@ def build_training_samples(
         - ``"label_v2"``: 10-day forward return > ATR(14)
         - ``"label_v3"``: MFE/MAE > 2.0 (profit factor over 10 days)
         - ``"label_v4"``: 10-day return > 0 AND 5-day max DD < 2 * ATR(14)
+        - ``"quality_v1"``: train only high-quality vs poor signals; neutral
+          samples are ignored.
     max_drawdown_threshold:
         Used for ``"profit_aware"`` label type.
     """
@@ -419,6 +439,21 @@ def build_training_samples(
             fwd_5_rets = (fwd_5 / close.iloc[pos]) - 1.0
             max_dd_5 = float(fwd_5_rets.min())
             label = 1.0 if (fwd_ret > 0 and max_dd_5 > -2.0 * atr14) else 0.0
+        elif label_type == "quality_v1":
+            entry_price = open_price.iloc[pos]
+            fwd_path = open_price.iloc[pos + 1 : pos + forward_return_days + 1]
+            if len(fwd_path) == 0 or entry_price <= 0:
+                continue
+            fwd_rets = fwd_path.to_numpy(dtype=np.float64) / entry_price - 1.0
+            fwd_ret = float(close.iloc[pos + forward_return_days] / close.iloc[pos] - 1.0)
+            mae = float(np.min(fwd_rets))
+            threshold = 0.03
+            if fwd_ret > threshold and mae > -threshold / 2.0:
+                label = 1.0
+            elif fwd_ret <= 0:
+                label = 0.0
+            else:
+                continue
         else:
             raise ValueError(f"unknown label_type: {label_type}")
 
@@ -522,6 +557,20 @@ def build_daily_labels(
             fwd_5_rets = (fwd_5 / close.iloc[pos]) - 1.0
             max_dd_5 = float(fwd_5_rets.min())
             label = 1.0 if (fwd_ret > 0 and max_dd_5 > -2.0 * atr14) else 0.0
+        elif label_type == "quality_v1":
+            fwd_prices = close.iloc[pos : min(pos + forward_days + 1, len(close))]
+            if len(fwd_prices) < 2:
+                continue
+            fwd_rets = (fwd_prices / close.iloc[pos]) - 1.0
+            fwd_ret = float(fwd_rets.iloc[-1])
+            mae = float(fwd_rets.min())
+            threshold = 0.03
+            if fwd_ret > threshold and mae > -threshold / 2.0:
+                label = 1.0
+            elif fwd_ret <= 0:
+                label = 0.0
+            else:
+                continue
         else:
             raise ValueError(f"unknown label_type: {label_type}")
 
@@ -682,7 +731,6 @@ def run_meta_label_wfo(
         r.train_precision = float(np.mean(train_pred == y_train))
 
         # Test-set metrics
-        test_prob = model.predict_proba(X_test)
         test_pred = model.predict(X_test)
         r.test_precision = float(np.mean(test_pred == y_test))
         r.test_n_pred_positive = int(test_pred.sum())

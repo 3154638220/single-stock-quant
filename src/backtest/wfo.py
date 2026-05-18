@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict
 from itertools import product
 from statistics import mode
@@ -26,14 +27,20 @@ DEFAULT_PARAM_GRID: dict[str, list] = {
     "stop_loss_pct": [0.05, 0.08, 0.10],
 }
 
-# S6 — focused parameter grid (3^4 = 81 combos, down from 324)
-# Prioritises exit quality over raw signal tuning.
-FOCUSED_PARAM_GRID: dict[str, list] = {
-    "macd_fast": [10, 12, 14],
-    "macd_signal": [8, 9, 10],
-    "profit_lock_trigger": [0.06, 0.08, 0.10],
-    "profit_lock_trailing": [0.03, 0.04, 0.06],
+# 2026-05-18 return-improvement grid (4×3×4×2×3×3 = 864 combos).
+# It keeps the search in the MACD + exit layer where historical experiments
+# found the most reliable return leverage.
+EXTENDED_PARAM_GRID: dict[str, list] = {
+    "macd_fast": [8, 10, 12, 14],
+    "macd_slow": [22, 26, 30],
+    "macd_signal": [7, 8, 9, 10],
+    "min_run_len": [1, 2],
+    "profit_lock_trigger": [0.10, 0.12, 0.15],
+    "profit_lock_trailing": [0.04, 0.05, 0.06],
+    "dk_fade_exit_n": [0, 2, 3, 5],
 }
+
+FOCUSED_PARAM_GRID: dict[str, list] = EXTENDED_PARAM_GRID
 
 _BT_PARAM_KEYS = {
     "stop_loss_pct", "trailing_stop_pct", "atr_stop_multiplier", "atr_stop_period",
@@ -141,26 +148,24 @@ def _composite_score(
     res,
     *,
     train_days: int = 504,
-    min_trades_per_year: int = 4,
-    max_trades_per_year: int = 24,
-    max_drawdown_limit: float = 0.40,
-    w_sharpe: float = 0.35,
-    w_calmar: float = 0.40,
-    w_dd_score: float = 0.25,
+    min_trades_per_year: float = 2.0,
+    max_trades_per_year: float = 30.0,
+    max_drawdown_limit: float = 0.35,
+    w_calmar: float = 0.35,
+    w_sharpe: float = 0.25,
+    w_dd_score: float = 0.15,
+    w_total_return: float = 0.15,
+    w_trade_freq: float = 0.10,
 ) -> float:
-    """S6 stability-first composite objective score.
+    """Return-quality composite objective score.
 
     Returns ``-inf`` when any hard constraint is violated.
-    Hard constraints are stricter than before:
-      - 4-24 trades/year (too few = sparse, too many = noise-fitting)
-      - max drawdown <= 40%
-    Soft weights: Calmar (40%), Sharpe (35%), DD score (25%), with a
-    reliability discount for sparse trade samples.
+    The 2026-05-18 plan relaxes sparse-trade penalties but tightens drawdown,
+    and adds total return as a direct secondary objective.
     """
     years = max(train_days / 252.0, 0.25)
     n_per_year = res.n_trades / years
 
-    # Hard constraints (stricter)
     if n_per_year < min_trades_per_year:
         return -np.inf
     if n_per_year > max_trades_per_year:
@@ -169,12 +174,20 @@ def _composite_score(
         return -np.inf
 
     sharpe = np.clip(res.sharpe_ratio, -2.0, 3.0) if np.isfinite(res.sharpe_ratio) else -2.0
-    calmar = np.clip(res.calmar_ratio, -1.0, 2.0) if np.isfinite(res.calmar_ratio) else -1.0
-    dd_score = max(0.0, 1.0 - res.max_drawdown) if np.isfinite(res.max_drawdown) else 0.0
+    calmar = np.clip(res.calmar_ratio, -1.0, 3.0) if np.isfinite(res.calmar_ratio) else -1.0
+    total_ret = np.clip(res.total_return, -0.5, 1.0) if np.isfinite(res.total_return) else -0.5
+    dd_score = max(0.0, 1.0 - res.max_drawdown * 2.0) if np.isfinite(res.max_drawdown) else 0.0
+    trade_freq_score = min(float(n_per_year) / 10.0, 1.0)
 
-    raw_score = w_sharpe * sharpe + w_calmar * calmar + w_dd_score * dd_score
-    reliability = min(1.0, max(float(res.n_trades), 0.0) / 20.0)
-    reliability = max(reliability, 0.10)
+    raw_score = (
+        w_calmar * calmar
+        + w_sharpe * sharpe
+        + w_dd_score * dd_score
+        + w_total_return * total_ret
+        + w_trade_freq * trade_freq_score
+    )
+    reliability = min(1.0, max(float(res.n_trades), 0.0) / 10.0)
+    reliability = max(reliability, 0.30)
     return raw_score * reliability if raw_score >= 0 else raw_score / reliability
 
 
@@ -240,6 +253,42 @@ def _params_with(base: DKTrendParams, overrides: dict[str, Any], mode_value: str
     data.update(trend_overrides)
     data["mode"] = mode_value
     return DKTrendParams.from_mapping(data), bt_kwargs
+
+
+def _eval_wfo_combo(task: tuple[Any, ...]) -> float:
+    (
+        code,
+        train_df,
+        base,
+        combo,
+        mode_value,
+        base_bt,
+        cost_bps,
+        initial_capital,
+        train_days,
+        score_min_trades_per_year,
+        score_max_trades_per_year,
+        score_max_drawdown_limit,
+    ) = task
+    params, combo_bt = _params_with(base, combo, mode_value)
+    bt = {**base_bt, **combo_bt}
+    res = run_single_stock_backtest(
+        code,
+        train_df,
+        params,
+        cost_bps=cost_bps,
+        initial_capital=initial_capital,
+        **{k: v for k, v in bt.items() if k in _VALID_BT_KWARGS},
+    )
+    return float(
+        _composite_score(
+            res,
+            train_days=train_days,
+            min_trades_per_year=float(score_min_trades_per_year),
+            max_trades_per_year=float(score_max_trades_per_year),
+            max_drawdown_limit=float(score_max_drawdown_limit),
+        )
+    )
 
 
 def _stability(best_by_fold: list[dict[str, Any]]) -> dict[str, Any]:
@@ -616,17 +665,18 @@ def _fit_meta_model_for_fold(
             dk_trend_state=dk_trend_state,
         )
 
-    if len(X) < min_samples or len(np.unique(y)) < 2:
+    effective_min_samples = max(int(min_samples), 20) if model_type == "gbm" else int(min_samples)
+    if len(X) < effective_min_samples or len(np.unique(y)) < 2:
         return None
 
     if model_type == "gbm":
         from src.models.meta_label_gbm import GBMMetaModel
         model = GBMMetaModel(
-            n_estimators=100,
-            max_depth=2,
+            n_estimators=50,
+            max_depth=3,
             learning_rate=0.05,
             subsample=0.8,
-            min_samples_leaf=max(3, min(5, len(X) // 10)),
+            min_samples_leaf=max(5, len(X) // 10),
         )
     else:
         model = LogisticMetaModel(l2_penalty=l2_penalty)
@@ -661,7 +711,10 @@ def _compute_dk_state(
             trend, enabled=volume_confirm, lookback=volume_lookback,
             volume_ratio_min=volume_ratio_min,
         ).reset_index(drop=True)
-    return trend[["trade_date", "dk_color", "dk_run_len"]].copy()
+    keep_cols = ["trade_date", "dk_color", "dk_run_len"]
+    if "dk_value" in trend.columns:
+        keep_cols.append("dk_value")
+    return trend[keep_cols].copy()
 
 
 def _oos_trend_with_warmup(
@@ -719,6 +772,7 @@ def run_walk_forward_optimization(
     param_grid: dict[str, list[Any]] | None = None,
     train_days: int = 504,
     oos_days: int = 126,
+    step_days: int | None = None,
     mode: TrendMode | str = TrendMode.MACD_CROSS,
     window: str = "rolling",
     cost_bps: float = 15.0,
@@ -732,9 +786,10 @@ def run_walk_forward_optimization(
     meta_model_type: str = "logistic",
     meta_use_daily_samples: bool = False,
     stability_weighting: bool = False,
-    score_min_trades_per_year: float = 4.0,
-    score_max_trades_per_year: float = 24.0,
-    score_max_drawdown_limit: float = 0.40,
+    score_min_trades_per_year: float = 2.0,
+    score_max_trades_per_year: float = 30.0,
+    score_max_drawdown_limit: float = 0.35,
+    n_jobs: int = 1,
 ) -> dict[str, Any]:
     """Run rolling or expanding WFO and return a JSON-serializable report."""
     code = str(symbol).strip().zfill(6)
@@ -750,6 +805,9 @@ def run_walk_forward_optimization(
     combos = _param_combinations(grid)
     if not combos:
         raise ValueError("param_grid is empty")
+    step = int(step_days if step_days is not None else oos_days)
+    if step <= 0:
+        raise ValueError("step_days must be positive")
 
     base_bt = dict(bt_kwargs or {})
     panels = []
@@ -769,28 +827,46 @@ def run_walk_forward_optimization(
         train_df = df.iloc[train_start:train_end].copy()
         oos_df = df.iloc[oos_start:oos_end].copy()
 
-        is_scores: list[float] = []
-        is_returns_list: list[pd.Series] = []
-        for combo in combos:
-            params, combo_bt = _params_with(base, combo, mode_value)
-            bt = {**base_bt, **combo_bt}
-            res = run_single_stock_backtest(
-                code,
-                train_df,
-                params,
-                cost_bps=cost_bps,
-                initial_capital=initial_capital,
-                **{k: v for k, v in bt.items() if k in _VALID_BT_KWARGS},
-            )
-            score = _composite_score(
-                res,
-                train_days=train_days,
-                min_trades_per_year=float(score_min_trades_per_year),
-                max_trades_per_year=float(score_max_trades_per_year),
-                max_drawdown_limit=float(score_max_drawdown_limit),
-            )
-            is_scores.append(float(score))
-            is_returns_list.append(res.daily_returns)
+        if int(n_jobs) > 1 and len(combos) > 1:
+            tasks = [
+                (
+                    code,
+                    train_df,
+                    base,
+                    combo,
+                    mode_value,
+                    base_bt,
+                    cost_bps,
+                    initial_capital,
+                    train_days,
+                    score_min_trades_per_year,
+                    score_max_trades_per_year,
+                    score_max_drawdown_limit,
+                )
+                for combo in combos
+            ]
+            with ProcessPoolExecutor(max_workers=int(n_jobs)) as executor:
+                is_scores = list(executor.map(_eval_wfo_combo, tasks))
+        else:
+            is_scores = [
+                _eval_wfo_combo(
+                    (
+                        code,
+                        train_df,
+                        base,
+                        combo,
+                        mode_value,
+                        base_bt,
+                        cost_bps,
+                        initial_capital,
+                        train_days,
+                        score_min_trades_per_year,
+                        score_max_trades_per_year,
+                        score_max_drawdown_limit,
+                    )
+                )
+                for combo in combos
+            ]
 
         # Platform selection (top 20% region)
         best_platform, platform_score, platform_info = _select_platform(
@@ -877,7 +953,7 @@ def run_walk_forward_optimization(
         all_is_scores.extend(is_scores)
         all_oos_sharpes.append(panel.sharpe_ratio)
         fold += 1
-        start += oos_days
+        start += step
 
     stitched = pd.concat(oos_returns).sort_index() if oos_returns else pd.Series(dtype=float)
     aggregated = aggregate_panels(panels)
@@ -906,11 +982,13 @@ def run_walk_forward_optimization(
         "n_folds": len(panels),
         "train_days": int(train_days),
         "oos_days": int(oos_days),
+        "step_days": int(step),
         "window": str(window),
         "enable_meta_label": bool(enable_meta_label),
         "meta_label_mode": str(meta_label_mode) if enable_meta_label else "off",
         "meta_label_threshold": float(meta_label_threshold),
         "stability_weighting": bool(stability_weighting),
+        "n_jobs": int(n_jobs),
         "oos_panels": oos_panel_dicts,
         "aggregated": aggregated,
         "best_params_by_fold": best_by_fold,
@@ -930,8 +1008,10 @@ def run_nested_walk_forward_optimization(
     param_grid: dict[str, list[Any]] | None = None,
     outer_train_days: int = 756,
     outer_oos_days: int = 252,
+    outer_step_days: int | None = None,
     inner_train_days: int = 504,
     inner_oos_days: int = 126,
+    inner_step_days: int | None = None,
     mode: TrendMode | str = TrendMode.MACD_CROSS,
     window: str = "rolling",
     cost_bps: float = 15.0,
@@ -945,9 +1025,10 @@ def run_nested_walk_forward_optimization(
     meta_model_type: str = "logistic",
     meta_use_daily_samples: bool = False,
     stability_weighting: bool = True,
-    score_min_trades_per_year: float = 4.0,
-    score_max_trades_per_year: float = 24.0,
-    score_max_drawdown_limit: float = 0.40,
+    score_min_trades_per_year: float = 2.0,
+    score_max_trades_per_year: float = 30.0,
+    score_max_drawdown_limit: float = 0.35,
+    n_jobs: int = 1,
 ) -> dict[str, Any]:
     """Nested walk-forward optimisation.
 
@@ -973,6 +1054,9 @@ def run_nested_walk_forward_optimization(
     combos = _param_combinations(grid)
     if not combos:
         raise ValueError("param_grid is empty")
+    outer_step = int(outer_step_days if outer_step_days is not None else outer_oos_days)
+    if outer_step <= 0:
+        raise ValueError("outer_step_days must be positive")
 
     base_bt = dict(bt_kwargs or {})
 
@@ -1000,6 +1084,7 @@ def run_nested_walk_forward_optimization(
             param_grid=grid,
             train_days=inner_train_days,
             oos_days=inner_oos_days,
+            step_days=inner_step_days,
             mode=mode_value,
             window=window,
             cost_bps=cost_bps,
@@ -1016,6 +1101,7 @@ def run_nested_walk_forward_optimization(
             score_min_trades_per_year=float(score_min_trades_per_year),
             score_max_trades_per_year=float(score_max_trades_per_year),
             score_max_drawdown_limit=float(score_max_drawdown_limit),
+            n_jobs=int(n_jobs),
         )
 
         # Prefer a cross-fold stable parameter centre; fall back to voting when
@@ -1106,7 +1192,7 @@ def run_nested_walk_forward_optimization(
 
         all_selected_params.append(dict(selected_params))
         fold += 1
-        start += outer_oos_days
+        start += outer_step
 
     stitched = pd.concat(oos_returns).sort_index() if oos_returns else pd.Series(dtype=float)
     aggregated = {}
@@ -1127,13 +1213,16 @@ def run_nested_walk_forward_optimization(
         "n_outer_folds": len(outer_fold_results),
         "outer_train_days": int(outer_train_days),
         "outer_oos_days": int(outer_oos_days),
+        "outer_step_days": int(outer_step),
         "inner_train_days": int(inner_train_days),
         "inner_oos_days": int(inner_oos_days),
+        "inner_step_days": int(inner_step_days if inner_step_days is not None else inner_oos_days),
         "window": str(window),
         "enable_meta_label": bool(enable_meta_label),
         "meta_label_mode": str(meta_label_mode) if enable_meta_label else "off",
         "meta_label_threshold": float(meta_label_threshold),
         "stability_weighting": bool(stability_weighting),
+        "n_jobs": int(n_jobs),
         "outer_folds": outer_fold_results,
         "aggregated": aggregated,
         "inner_wfo_summaries": inner_wfo_summaries,

@@ -10,6 +10,11 @@ import pandas as pd
 
 from .utils import ema, ema_seeded
 
+try:  # Optional acceleration; the pure-Python path below remains the fallback.
+    from numba import njit
+except Exception:  # pragma: no cover - depends on optional runtime package
+    njit = None
+
 
 class TrendMode(str, Enum):
     MACD_CROSS = "macd_cross"
@@ -390,11 +395,29 @@ def _persistent_price_change_color(
 ) -> pd.Series:
     close = pd.to_numeric(df["close"], errors="coerce")
     prev_close = close.shift(1)
-    color = pd.Series("", index=df.index, dtype="object")
     hold_days = max(int(params.bar_color_hold_days), 0)
     min_red_run = max(int(params.bar_color_min_red_run), 1)
     hyst = float(params.hysteresis_pct)
 
+    if _persistent_color_numba is not None:
+        trend_code = trend_state.map({"red": 1, "green": -1}).fillna(0).to_numpy(dtype=np.int64)
+        codes = _persistent_color_numba(
+            close.to_numpy(dtype=np.float64),
+            prev_close.to_numpy(dtype=np.float64),
+            pd.to_numeric(bar_mid, errors="coerce").to_numpy(dtype=np.float64),
+            pd.to_numeric(lst, errors="coerce").to_numpy(dtype=np.float64),
+            trend_code,
+            hold_days,
+            min_red_run,
+            hyst,
+        )
+        return pd.Series(
+            np.where(codes == 1, "red", np.where(codes == -1, "green", "")),
+            index=df.index,
+            dtype="object",
+        )
+
+    color = pd.Series("", index=df.index, dtype="object")
     red_run = 0
     pullback_days = 0
     prev_color = ""
@@ -434,6 +457,62 @@ def _persistent_price_change_color(
         color.loc[idx] = current
         prev_color = current
     return color
+
+
+if njit is not None:
+    @njit(cache=True)
+    def _persistent_color_numba(
+        close_arr,
+        prev_close_arr,
+        bar_mid_arr,
+        lst_arr,
+        trend_state_arr,
+        hold_days,
+        min_red_run,
+        hyst,
+    ):
+        out = np.zeros(len(close_arr), dtype=np.int64)
+        red_run = 0
+        pullback_days = 0
+        prev_color = 0
+        for i in range(len(close_arr)):
+            c = close_arr[i]
+            pc = prev_close_arr[i]
+            if not np.isfinite(c):
+                out[i] = 0
+                red_run = 0
+                pullback_days = 0
+                prev_color = 0
+                continue
+            if not np.isfinite(pc):
+                current = trend_state_arr[i] if trend_state_arr[i] == 1 or trend_state_arr[i] == -1 else 0
+                pullback_days = 0
+            elif c >= pc:
+                current = 1
+                pullback_days = 0
+            else:
+                strong_red_trend = (
+                    prev_color == 1
+                    and red_run >= min_red_run
+                    and trend_state_arr[i] == 1
+                    and np.isfinite(bar_mid_arr[i])
+                    and np.isfinite(lst_arr[i])
+                    and bar_mid_arr[i] > lst_arr[i] * (1.0 + hyst)
+                )
+                pullback_days = pullback_days + 1 if prev_color == 1 else 1
+                current = 1 if strong_red_trend and pullback_days <= hold_days else -1
+
+            if current == 1:
+                red_run = red_run + 1 if prev_color == 1 else 1
+            else:
+                red_run = 0
+            if current != 1:
+                pullback_days = 0
+            out[i] = current
+            prev_color = current
+        return out
+else:
+    _persistent_color_numba = None
 
 
 def _compute_eastmoney_dkbar(df: pd.DataFrame, params: DKTrendParams) -> pd.DataFrame:

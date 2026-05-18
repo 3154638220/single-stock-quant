@@ -33,17 +33,19 @@ def main() -> int:
     parser.add_argument("--end")
     parser.add_argument("--train-days", type=int)
     parser.add_argument("--oos-days", type=int)
+    parser.add_argument("--step-days", type=int)
     parser.add_argument("--mode", choices=[m.value for m in TrendMode], help="Trend mode; defaults to trend_signal.mode in config")
     parser.add_argument("--window", choices=["rolling", "expanding"], default="rolling")
     parser.add_argument("--nested", action="store_true", help="Use nested WFO (outer→inner) for honest OOS evaluation")
     parser.add_argument("--inner-train-days", type=int, default=504, help="Inner WFO train days (for --nested)")
     parser.add_argument("--inner-oos-days", type=int, default=126, help="Inner WFO OOS days (for --nested)")
+    parser.add_argument("--inner-step-days", type=int, help="Inner WFO step days (for --nested)")
     parser.add_argument("--enable-meta-label", action="store_true", help="Train a fold-local meta-label model and use it in each OOS fold")
     parser.add_argument("--meta-label-mode", choices=["hard", "scale"], default="hard")
     parser.add_argument("--meta-label-threshold", type=float, default=0.50)
     parser.add_argument("--meta-label-min-samples", type=int, default=10)
     parser.add_argument("--meta-label-type", default="profit_aware",
-                        choices=["profit", "profit_aware", "risk_reward", "label_v1", "label_v2", "label_v3", "label_v4"])
+                        choices=["profit", "profit_aware", "risk_reward", "label_v1", "label_v2", "label_v3", "label_v4", "quality_v1"])
     parser.add_argument("--meta-model-type", default="logistic", choices=["logistic", "gbm"])
     parser.add_argument("--meta-use-daily-samples", action="store_true",
                         help="Train meta-label on all DK red days (daily-level) instead of signal days only")
@@ -57,6 +59,7 @@ def main() -> int:
     parser.add_argument("--volatility-lookback", type=int, help="EWMA volatility span in trading bars")
     parser.add_argument("--volatility-high-vol-multiple", type=float, help="High-volatility trigger as a multiple of expanding median EWMA vol")
     parser.add_argument("--volatility-high-vol-scale", type=float, help="Maximum position multiplier when high-volatility trigger fires")
+    parser.add_argument("--n-jobs", type=int, help="Parallel workers for parameter-grid scoring")
     parser.add_argument("--export-results", action="store_true")
     parser.add_argument("--plot-heatmap", action="store_true")
     parser.add_argument("--config", help="Config file path")
@@ -67,9 +70,11 @@ def main() -> int:
     wfo_cfg = cfg.get("wfo", {}) or {}
     train_days = int(args.train_days if args.train_days is not None else wfo_cfg.get("train_days", 504))
     oos_days = int(args.oos_days if args.oos_days is not None else wfo_cfg.get("oos_days", 126))
-    score_min_trades_per_year = float(wfo_cfg.get("min_trades_per_year", 4.0))
-    score_max_trades_per_year = float(wfo_cfg.get("max_trades_per_year", 24.0))
-    score_max_drawdown_limit = float(wfo_cfg.get("max_drawdown_limit", 0.40))
+    step_days = int(args.step_days if args.step_days is not None else wfo_cfg.get("step_days", oos_days))
+    score_min_trades_per_year = float(wfo_cfg.get("min_trades_per_year", 2.0))
+    score_max_trades_per_year = float(wfo_cfg.get("max_trades_per_year", 30.0))
+    score_max_drawdown_limit = float(wfo_cfg.get("max_drawdown_limit", 0.35))
+    n_jobs = int(args.n_jobs if args.n_jobs is not None else wfo_cfg.get("n_jobs", 1))
     selected_mode = args.mode or str((cfg.get("trend_signal", {}) or {}).get("mode", "macd_cross"))
     symbol = str(args.symbol).strip().zfill(6)
     with DuckDBManager(config_path=args.config, duckdb_path=args.duckdb_path) as db:
@@ -108,8 +113,10 @@ def main() -> int:
             param_grid=wfo_cfg.get("param_grid"),
             outer_train_days=train_days,
             outer_oos_days=oos_days,
+            outer_step_days=step_days,
             inner_train_days=args.inner_train_days,
             inner_oos_days=args.inner_oos_days,
+            inner_step_days=args.inner_step_days,
             mode=selected_mode,
             window=args.window,
             cost_bps=bt_kwargs.pop("cost_bps"),
@@ -126,6 +133,7 @@ def main() -> int:
             score_min_trades_per_year=score_min_trades_per_year,
             score_max_trades_per_year=score_max_trades_per_year,
             score_max_drawdown_limit=score_max_drawdown_limit,
+            n_jobs=n_jobs,
         )
 
         agg = result["aggregated"]
@@ -165,6 +173,7 @@ def main() -> int:
             param_grid=wfo_cfg.get("param_grid"),
             train_days=train_days,
             oos_days=oos_days,
+            step_days=step_days,
             mode=selected_mode,
             window=args.window,
             cost_bps=bt_kwargs.pop("cost_bps"),
@@ -181,6 +190,7 @@ def main() -> int:
             score_min_trades_per_year=score_min_trades_per_year,
             score_max_trades_per_year=score_max_trades_per_year,
             score_max_drawdown_limit=score_max_drawdown_limit,
+            n_jobs=n_jobs,
         )
 
         agg = result["aggregated"]
