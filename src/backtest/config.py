@@ -6,7 +6,7 @@ from typing import Any
 
 import pandas as pd
 
-from src.backtest.transaction_costs import TransactionCostParams, transaction_cost_params_from_mapping
+from src.backtest.transaction_costs import transaction_cost_params_from_mapping
 
 
 def build_bt_kwargs(cfg: dict[str, Any], *, index_ohlcv: pd.DataFrame | None = None) -> dict[str, Any]:
@@ -62,7 +62,12 @@ def build_bt_kwargs(cfg: dict[str, Any], *, index_ohlcv: pd.DataFrame | None = N
         "time_stop_min_return": float(bt_cfg.get("time_stop_min_return", 0.0)),
         "profit_lock_trigger": float(bt_cfg.get("profit_lock_trigger", 0.0)),
         "profit_lock_trailing": float(bt_cfg.get("profit_lock_trailing", 0.0)),
+        "profit_lock_trigger_hq": float(bt_cfg.get("profit_lock_trigger_hq", 0.0)),
+        "profit_lock_trailing_hq": float(bt_cfg.get("profit_lock_trailing_hq", 0.0)),
+        "quality_hq_threshold": float(bt_cfg.get("quality_hq_threshold", 70.0)),
         "market_exit_mode": str(bt_cfg.get("market_exit_mode", "off")),
+        "sector_drop_threshold": float(bt_cfg.get("sector_drop_threshold", 0.10)),
+        "sector_ma_period": int(bt_cfg.get("sector_ma_period", 20)),
         # Phase 4.2 — volatility-target position sizing
         "volatility_target_ann": float(bt_cfg.get("volatility_target_ann", 0.0)),
         "volatility_lookback": int(bt_cfg.get("volatility_lookback", 20)),

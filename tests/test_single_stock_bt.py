@@ -390,6 +390,101 @@ def test_market_exit_with_index_data():
     assert res.market_exit_exits >= 0  # may or may not trigger with short data
 
 
+def test_sector_exit_mode_uses_sector_index_flags():
+    closes = [10] * 35 + [11, 11, 11, 11, 11]
+    df = pd.DataFrame(
+        {
+            "trade_date": pd.date_range("2024-01-01", periods=len(closes)),
+            "open": closes,
+            "high": closes,
+            "low": closes,
+            "close": closes,
+            "volume": [100] * len(closes),
+        }
+    )
+    trend = df.copy()
+    trend["dk_color"] = "green"
+    trend["dk_signal"] = ""
+    trend["dk_run_len"] = 0
+    trend["dk_value"] = 0.0
+    trend.loc[20:, "dk_color"] = "red"
+    trend.loc[20:, "dk_run_len"] = range(1, len(trend.loc[20:]) + 1)
+    trend.loc[20, "dk_signal"] = "buy"
+    sector = df.copy()
+    sector["symbol"] = "515030"
+    sector["close"] = [100] * 25 + [85] * (len(closes) - 25)
+
+    res = run_single_stock_backtest(
+        "300750",
+        df,
+        DKTrendParams(),
+        cost_bps=0,
+        initial_capital=10000,
+        trend_override=trend,
+        market_exit_mode="sector",
+        sector_index_ohlcv=sector,
+        sector_drop_threshold=0.10,
+        sector_ma_period=5,
+    )
+
+    assert res.market_exit_exits == 1
+    assert res.trade_log.iloc[0]["exit_reason"] == "sector_exit"
+
+
+def test_high_quality_profit_lock_uses_hq_thresholds():
+    n = 90
+    base = [10 + i * 0.02 for i in range(n)]
+    base[72] = 11.6
+    base[73] = 11.0
+    base[74:] = [11.0] * (n - 74)
+    df = pd.DataFrame(
+        {
+            "trade_date": pd.date_range("2024-01-01", periods=n),
+            "open": base,
+            "high": [x * 1.01 for x in base],
+            "low": [x * 0.99 for x in base],
+            "close": base,
+            "volume": [100] * 65 + [300] * (n - 65),
+        }
+    )
+    trend = df.copy()
+    trend["dk_color"] = "green"
+    trend["dk_signal"] = ""
+    trend["dk_run_len"] = 0
+    trend["dk_value"] = 0.0
+    trend["consensus_red_count"] = 3
+    trend.loc[65:, "dk_color"] = "red"
+    trend.loc[65:, "dk_run_len"] = range(1, len(trend.loc[65:]) + 1)
+    trend.loc[65, "dk_signal"] = "buy"
+
+    normal = run_single_stock_backtest(
+        "000783",
+        df,
+        DKTrendParams(),
+        cost_bps=0,
+        initial_capital=10000,
+        trend_override=trend,
+        profit_lock_trigger=0.02,
+        profit_lock_trailing=0.03,
+    )
+    hq = run_single_stock_backtest(
+        "000783",
+        df,
+        DKTrendParams(),
+        cost_bps=0,
+        initial_capital=10000,
+        trend_override=trend,
+        profit_lock_trigger=0.02,
+        profit_lock_trailing=0.03,
+        profit_lock_trigger_hq=0.20,
+        profit_lock_trailing_hq=0.06,
+        quality_hq_threshold=65.0,
+    )
+
+    assert normal.profit_lock_exits == 1
+    assert hq.profit_lock_exits == 0
+
+
 def test_donchian_breakout_mode_runs_without_error():
     """Donchian breakout should compute signals and complete a backtest."""
     closes = [10] * 30 + [10.5, 10.8, 11.0, 11.3, 11.1, 10.9, 11.5, 11.8, 12.0, 11.7,

@@ -51,7 +51,9 @@ _BT_PARAM_KEYS = {
     "min_quality_score", "quality_score_floor",
     "time_stop_days", "time_stop_min_return",
     "profit_lock_trigger", "profit_lock_trailing",
+    "profit_lock_trigger_hq", "profit_lock_trailing_hq", "quality_hq_threshold",
     "market_exit_mode",
+    "sector_drop_threshold", "sector_ma_period",
     "volatility_target_ann", "volatility_lookback",
     "drawdown_throttle_enabled",
     "meta_label_threshold", "meta_label_mode",
@@ -78,7 +80,9 @@ _VALID_BT_KWARGS = {
     "min_quality_score", "quality_score_mode", "quality_score_floor",
     "time_stop_days", "time_stop_min_return",
     "profit_lock_trigger", "profit_lock_trailing",
+    "profit_lock_trigger_hq", "profit_lock_trailing_hq", "quality_hq_threshold",
     "market_exit_mode",
+    "sector_index_ohlcv", "sector_drop_threshold", "sector_ma_period",
     "volatility_target_ann", "volatility_lookback",
     "drawdown_throttle_enabled",
     "meta_model", "meta_label_threshold", "meta_label_mode",
@@ -665,16 +669,16 @@ def _fit_meta_model_for_fold(
             dk_trend_state=dk_trend_state,
         )
 
-    effective_min_samples = max(int(min_samples), 20) if model_type == "gbm" else int(min_samples)
+    effective_min_samples = max(int(min_samples), 15) if model_type == "gbm" else int(min_samples)
     if len(X) < effective_min_samples or len(np.unique(y)) < 2:
         return None
 
     if model_type == "gbm":
         from src.models.meta_label_gbm import GBMMetaModel
         model = GBMMetaModel(
-            n_estimators=50,
-            max_depth=3,
-            learning_rate=0.05,
+            n_estimators=30,
+            max_depth=2,
+            learning_rate=0.1,
             subsample=0.8,
             min_samples_leaf=max(5, len(X) // 10),
         )

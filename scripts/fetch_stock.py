@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from src.data_fetcher.akshare_client import fetch_etf_daily, fill_derived_daily_fields
 from src.data_fetcher.db_manager import DuckDBManager
 from src.settings import load_config
 
@@ -65,6 +66,12 @@ def _symbols(args: argparse.Namespace) -> list[str]:
         items.append(args.symbol)
     if args.symbols:
         items.extend(args.symbols)
+    if args.watchlist:
+        path = Path(args.watchlist).expanduser()
+        for line in path.read_text(encoding="utf-8").splitlines():
+            sym = line.split("#", 1)[0].strip()
+            if sym:
+                items.append(sym)
     out = []
     for item in items:
         code = str(item).strip().zfill(6)
@@ -74,6 +81,54 @@ def _symbols(args: argparse.Namespace) -> list[str]:
     if not out:
         raise SystemExit("provide --symbol or --symbols")
     return sorted(set(out))
+
+
+def _write_frame(db: DuckDBManager, table: str, df: pd.DataFrame) -> int:
+    if df.empty:
+        return 0
+    payload = fill_derived_daily_fields(
+        df.sort_values(["symbol", "trade_date"])
+        .drop_duplicates(subset=["symbol", "trade_date"], keep="last")
+        .reset_index(drop=True)
+    )
+    db.connection.register("df_fetch_stock_manual", payload)
+    try:
+        db.connection.execute(
+            f"""
+            INSERT OR REPLACE INTO {table}
+            SELECT * FROM df_fetch_stock_manual
+            """
+        )
+    finally:
+        db.connection.unregister("df_fetch_stock_manual")
+    return int(len(payload))
+
+
+def _fetch_etfs_to_table(
+    db: DuckDBManager,
+    symbols: list[str],
+    *,
+    table: str,
+    start: str,
+    end: str | None,
+    config: dict,
+) -> dict[str, tuple[int, bool]]:
+    counts: dict[str, tuple[int, bool]] = {}
+    end_s = end or pd.Timestamp.today().strftime("%Y%m%d")
+    for sym in symbols:
+        try:
+            existing_last = db.last_trade_date(sym)
+            start_s = (pd.Timestamp(existing_last) + pd.Timedelta(days=1)).strftime("%Y%m%d") if existing_last else start
+            if pd.Timestamp(start_s) > pd.Timestamp(end_s):
+                counts[sym] = (0, False)
+                continue
+            df = fetch_etf_daily(sym, start_s, end_s, config=config)
+            rows = _write_frame(db, table, df)
+            counts[sym] = (rows, False)
+        except Exception as exc:
+            print(f"{sym}: FAILED, {type(exc).__name__}: {exc}")
+            counts[sym] = (0, True)
+    return counts
 
 
 def _recent_quality_summary(symbol: str, df: pd.DataFrame, *, window: int = 30) -> RecentQualitySummary:
@@ -151,9 +206,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Fetch daily OHLCV for selected A-share symbols.")
     parser.add_argument("--symbol", help="Single 6-digit symbol, e.g. 600930")
     parser.add_argument("--symbols", nargs="+", help="Multiple 6-digit symbols")
+    parser.add_argument("--watchlist", help="File containing one symbol per line")
     parser.add_argument("--start", default="20150101", help="Default start date for new symbols, YYYYMMDD")
     parser.add_argument("--end", help="End date, YYYYMMDD or YYYY-MM-DD. Default: today")
     parser.add_argument("--config", help="Config file path")
+    parser.add_argument("--db-table", help="DuckDB table to write/read; defaults to configured daily table")
     parser.add_argument("--check-quality", action="store_true", help="Print recent quality summary after fetch")
     parser.add_argument("--quality-window", type=int, default=30, help="Rows per symbol used by --check-quality")
     parser.add_argument("--quality-min-rows", type=int, default=1, help="Minimum recent rows required with --fail-on-quality")
@@ -171,8 +228,23 @@ def main() -> int:
         if args.quality_max_gap_days is not None
         else int(quality_cfg.get("max_calendar_gap_days", 20))
     )
-    with DuckDBManager(config_path=args.config) as db:
-        counts = db.incremental_update_many(symbols, default_start=args.start, end_date=args.end)
+    with DuckDBManager(config_path=args.config, table_daily=args.db_table) as db:
+        table = args.db_table or cfg.get("database", {}).get("table_daily", "a_share_daily")
+        if args.db_table and args.db_table != cfg.get("database", {}).get("table_daily", "a_share_daily"):
+            manual_counts = _fetch_etfs_to_table(
+                db,
+                symbols,
+                table=table,
+                start=args.start,
+                end=args.end,
+                config=cfg,
+            )
+            counts = {
+                sym: type("ManualResult", (), {"rows_written": rows, "fetch_failed": failed})()
+                for sym, (rows, failed) in manual_counts.items()
+            }
+        else:
+            counts = db.incremental_update_many(symbols, default_start=args.start, end_date=args.end)
         for sym in symbols:
             result = counts.get(sym)
             rows = result.rows_written if result else 0

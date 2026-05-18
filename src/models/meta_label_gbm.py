@@ -23,7 +23,7 @@ class GBMMetaModel:
     Parameters
     ----------
     n_estimators:
-        Number of boosting stages. Keep low (50-100) for small samples.
+        Number of boosting stages. Keep low for small samples.
     max_depth:
         Maximum tree depth. 2 is recommended to prevent deep interactions.
     learning_rate:
@@ -40,9 +40,9 @@ class GBMMetaModel:
 
     def __init__(
         self,
-        n_estimators: int = 100,
+        n_estimators: int = 30,
         max_depth: int = 2,
-        learning_rate: float = 0.05,
+        learning_rate: float = 0.1,
         subsample: float = 0.8,
         min_samples_leaf: int = 5,
         class_weight: str = "balanced",

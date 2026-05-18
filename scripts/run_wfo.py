@@ -60,6 +60,7 @@ def main() -> int:
     parser.add_argument("--volatility-high-vol-multiple", type=float, help="High-volatility trigger as a multiple of expanding median EWMA vol")
     parser.add_argument("--volatility-high-vol-scale", type=float, help="Maximum position multiplier when high-volatility trigger fires")
     parser.add_argument("--n-jobs", type=int, help="Parallel workers for parameter-grid scoring")
+    parser.add_argument("--grid-key", default="param_grid", help="wfo config grid key to use, e.g. param_grid or fast_grid")
     parser.add_argument("--export-results", action="store_true")
     parser.add_argument("--plot-heatmap", action="store_true")
     parser.add_argument("--config", help="Config file path")
@@ -75,14 +76,45 @@ def main() -> int:
     score_max_trades_per_year = float(wfo_cfg.get("max_trades_per_year", 30.0))
     score_max_drawdown_limit = float(wfo_cfg.get("max_drawdown_limit", 0.35))
     n_jobs = int(args.n_jobs if args.n_jobs is not None else wfo_cfg.get("n_jobs", 1))
+    param_grid = wfo_cfg.get(str(args.grid_key))
+    if param_grid is None:
+        raise SystemExit(f"wfo.{args.grid_key} not found in config")
     selected_mode = args.mode or str((cfg.get("trend_signal", {}) or {}).get("mode", "macd_cross"))
     symbol = str(args.symbol).strip().zfill(6)
+    bt_cfg = cfg.get("backtest", {}) or {}
+    risk_cfg = cfg.get("risk", {}) or {}
+    benchmark_symbol = str(risk_cfg.get("benchmark_symbol", "510300")).strip().zfill(6)
+    sector_index_symbol = str(bt_cfg.get("sector_index_symbol", "")).strip().zfill(6)
+    symbols_to_read = [symbol]
+    if bool(risk_cfg.get("enable_index_filter", False)) and benchmark_symbol not in symbols_to_read:
+        symbols_to_read.append(benchmark_symbol)
+    if str(bt_cfg.get("market_exit_mode", "off")).lower() == "sector" and sector_index_symbol not in {"", "000000"}:
+        if sector_index_symbol not in symbols_to_read:
+            symbols_to_read.append(sector_index_symbol)
     with DuckDBManager(config_path=args.config, duckdb_path=args.duckdb_path) as db:
-        df = db.read_daily_frame(symbols=[symbol], start=args.start, end=args.end)
+        all_df = db.read_daily_frame(symbols=symbols_to_read, start=args.start, end=args.end)
+        sector_table_df = None
+        if str(bt_cfg.get("market_exit_mode", "off")).lower() == "sector" and sector_index_symbol not in {"", "000000"}:
+            sector_table_df = db.connection.execute(
+                """
+                SELECT table_name FROM information_schema.tables
+                WHERE table_name = 'sector_index'
+                """
+            ).df()
+    df = all_df[all_df["symbol"].astype(str).str.zfill(6) == symbol].copy()
     if df.empty:
         raise SystemExit("no daily data found; run scripts/fetch_stock.py first")
 
-    bt_kwargs = build_bt_kwargs(cfg)
+    index_df = all_df[all_df["symbol"].astype(str).str.zfill(6) == benchmark_symbol].copy()
+    bt_kwargs = build_bt_kwargs(cfg, index_ohlcv=index_df if not index_df.empty else None)
+    if str(bt_cfg.get("market_exit_mode", "off")).lower() == "sector" and sector_index_symbol not in {"", "000000"}:
+        sector_df = all_df[all_df["symbol"].astype(str).str.zfill(6) == sector_index_symbol].copy()
+        if sector_df.empty and sector_table_df is not None and not sector_table_df.empty:
+            with DuckDBManager(config_path=args.config, duckdb_path=args.duckdb_path, table_daily="sector_index") as sector_db:
+                sector_df = sector_db.read_daily_frame(symbols=[sector_index_symbol], start=args.start, end=args.end)
+        if sector_df.empty:
+            raise SystemExit(f"no sector index data found for {sector_index_symbol}; fetch it first")
+        bt_kwargs["sector_index_ohlcv"] = sector_df
     # WFO search overrides the base trend mode; clear consensus if not in grid.
     if cfg.get("trend_signal", {}).get("mode") != "consensus":
         bt_kwargs["consensus_n_agree"] = None
@@ -110,7 +142,7 @@ def main() -> int:
             symbol,
             df,
             base_params=_params(cfg, selected_mode),
-            param_grid=wfo_cfg.get("param_grid"),
+            param_grid=param_grid,
             outer_train_days=train_days,
             outer_oos_days=oos_days,
             outer_step_days=step_days,
@@ -170,7 +202,7 @@ def main() -> int:
             symbol,
             df,
             base_params=_params(cfg, selected_mode),
-            param_grid=wfo_cfg.get("param_grid"),
+            param_grid=param_grid,
             train_days=train_days,
             oos_days=oos_days,
             step_days=step_days,

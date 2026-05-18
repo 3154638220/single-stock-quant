@@ -14,7 +14,11 @@ from src.features.weekly_trend import compute_weekly_trend_state
 from src.indicators import DKTrendParams, TrendMode, compute_dktrend
 from src.indicators.adx import compute_adx
 from src.indicators.donchian import compute_donchian_trend
-from src.market.tradability import is_open_limit_down_unsellable, is_open_limit_up_unbuyable, is_row_suspended_like
+from src.market.tradability import (
+    is_open_limit_down_unsellable,
+    is_open_limit_up_unbuyable,
+    is_row_suspended_like,
+)
 from src.models.meta_label import FEATURE_COLUMNS, build_signal_features
 from src.signals.consensus import compute_consensus_trend
 from src.signals.generator import apply_volume_confirmation, compute_signal_quality
@@ -144,7 +148,25 @@ def _max_consecutive(values: list[bool], target: bool) -> int:
 
 
 def _future_exit_index(actions: dict[int, str], start_idx: int) -> int | None:
-    exits = [idx for idx, action in actions.items() if idx >= start_idx and action in {"sell", "stop_loss", "trailing_stop", "atr_stop", "atr_trailing_stop", "profit_lock", "market_exit", "time_stop", "dk_fade_exit", "intrapos_dd_stop"}]
+    exits = [
+        idx
+        for idx, action in actions.items()
+        if idx >= start_idx
+        and action
+        in {
+            "sell",
+            "stop_loss",
+            "trailing_stop",
+            "atr_stop",
+            "atr_trailing_stop",
+            "profit_lock",
+            "market_exit",
+            "sector_exit",
+            "time_stop",
+            "dk_fade_exit",
+            "intrapos_dd_stop",
+        }
+    ]
     return min(exits) if exits else None
 
 
@@ -230,6 +252,34 @@ def _predict_meta_p_win(meta_model: object, features: pd.DataFrame, idx: int) ->
     return float(p) if np.isfinite(p) else float("nan")
 
 
+def _align_sector_exit_flags(
+    sector_index_ohlcv: pd.DataFrame | None,
+    stock_dates: pd.Series,
+    *,
+    drop_threshold: float,
+    ma_period: int,
+) -> np.ndarray | None:
+    """Align sector-index stress flags to stock bars."""
+    if sector_index_ohlcv is None or sector_index_ohlcv.empty or "close" not in sector_index_ohlcv.columns:
+        return None
+    idx_df = sector_index_ohlcv.copy()
+    if "trade_date" in idx_df.columns:
+        idx_df["trade_date"] = pd.to_datetime(idx_df["trade_date"]).dt.normalize()
+    else:
+        idx_df["trade_date"] = pd.to_datetime(idx_df.index).normalize()
+    idx_df = idx_df.sort_values("trade_date").drop_duplicates("trade_date", keep="last").reset_index(drop=True)
+    idx_close = pd.to_numeric(idx_df["close"], errors="coerce")
+    lookback = max(int(ma_period), 1)
+    idx_drop = idx_close / idx_close.shift(lookback) - 1.0
+    idx_ma = idx_close.rolling(lookback, min_periods=lookback).mean()
+    sector_stressed = (idx_drop < -abs(float(drop_threshold))) | (idx_close < idx_ma)
+    date_to_flag = dict(zip(pd.to_datetime(idx_df["trade_date"]).dt.normalize(), sector_stressed.fillna(False)))
+    flags = np.zeros(len(stock_dates), dtype=bool)
+    for j, d in enumerate(pd.to_datetime(stock_dates).dt.normalize()):
+        flags[j] = bool(date_to_flag.get(d, False))
+    return flags
+
+
 def run_single_stock_backtest(
     symbol: str,
     ohlcv: pd.DataFrame,
@@ -277,7 +327,13 @@ def run_single_stock_backtest(
     time_stop_min_return: float = 0.0,
     profit_lock_trigger: float = 0.0,
     profit_lock_trailing: float = 0.0,
+    profit_lock_trigger_hq: float = 0.0,
+    profit_lock_trailing_hq: float = 0.0,
+    quality_hq_threshold: float = 70.0,
     market_exit_mode: str = "off",
+    sector_index_ohlcv: pd.DataFrame | None = None,
+    sector_drop_threshold: float = 0.10,
+    sector_ma_period: int = 20,
     # Phase 4.2 — volatility-target position sizing
     volatility_target_ann: float = 0.0,
     volatility_lookback: int = 20,
@@ -538,10 +594,16 @@ def run_single_stock_backtest(
 
     # Phase 4 — exit optimisation & position management state
     time_stop_enabled = max(int(time_stop_days), 0) > 0
-    profit_lock_enabled = max(float(profit_lock_trigger), 0.0) > 0 and max(float(profit_lock_trailing), 0.0) > 0
+    profit_lock_enabled = (
+        max(float(profit_lock_trigger), 0.0) > 0 and max(float(profit_lock_trailing), 0.0) > 0
+    ) or (
+        max(float(profit_lock_trigger_hq), 0.0) > 0 and max(float(profit_lock_trailing_hq), 0.0) > 0
+    )
     profit_lock_active = False
     profit_lock_high = float("nan")
-    market_exit = str(market_exit_mode).lower() in {"exit", "reduce"}
+    market_exit_mode_norm = str(market_exit_mode).lower()
+    market_exit = market_exit_mode_norm in {"exit", "reduce", "on"}
+    sector_exit = market_exit_mode_norm == "sector"
     vol_target_enabled = max(float(volatility_target_ann), 0.0) > 0
     vol_lookback = max(int(volatility_lookback), 5)
     close_returns = pd.to_numeric(df["close"], errors="coerce").pct_change()
@@ -583,6 +645,12 @@ def run_single_stock_backtest(
                     _idx_drop20_arr[_i] = bool(_drop < -0.08)
         _idx_ma60_below = _idx_ma60_below_arr
         _idx_drop20 = _idx_drop20_arr
+    _sector_exit_flags = _align_sector_exit_flags(
+        sector_index_ohlcv,
+        df["trade_date"],
+        drop_threshold=float(sector_drop_threshold),
+        ma_period=int(sector_ma_period),
+    ) if sector_exit else None
 
     for i in range(len(df)):
         action = actions.get(i)
@@ -663,6 +731,19 @@ def run_single_stock_backtest(
                 entry_regime = str(_meta.get("regime", "unknown"))
                 entry_rs_60_val = float(_meta.get("rs_60", float("nan")))
                 entry_meta_p_win = float(_meta.get("meta_p_win", float("nan")))
+                entry_profit_lock_trigger = max(float(profit_lock_trigger), 0.0)
+                entry_profit_lock_trailing = max(float(profit_lock_trailing), 0.0)
+                if (
+                    max(float(profit_lock_trigger_hq), 0.0) > 0
+                    and entry_quality >= float(quality_hq_threshold)
+                ):
+                    entry_profit_lock_trigger = max(float(profit_lock_trigger_hq), 0.0)
+                    entry_profit_lock_trailing = max(
+                        float(profit_lock_trailing_hq),
+                        entry_profit_lock_trailing,
+                    )
+                profit_lock_active = False
+                profit_lock_high = float("nan")
                 mae = 0.0
                 mfe = 0.0
                 if atr_stop_mult > 0 and not atr_series.empty:
@@ -673,7 +754,19 @@ def run_single_stock_backtest(
                         atr_stop_price = float("nan")
                 elif atr_stop_mult <= 0:
                     atr_stop_price = float("nan")
-        elif action in {"sell", "stop_loss", "trailing_stop", "atr_stop", "atr_trailing_stop", "profit_lock", "market_exit", "time_stop", "dk_fade_exit", "intrapos_dd_stop"} and in_pos:
+        elif action in {
+            "sell",
+            "stop_loss",
+            "trailing_stop",
+            "atr_stop",
+            "atr_trailing_stop",
+            "profit_lock",
+            "market_exit",
+            "sector_exit",
+            "time_stop",
+            "dk_fade_exit",
+            "intrapos_dd_stop",
+        } and in_pos:
             price = float(df.loc[i, "open"])
             if price <= 0 or not np.isfinite(price):
                 continue
@@ -702,7 +795,17 @@ def run_single_stock_backtest(
             )
             in_pos = False
             highest_close = float("nan")
-            if reentry_enabled and action in {"stop_loss", "trailing_stop", "atr_stop", "atr_trailing_stop", "profit_lock", "market_exit", "time_stop", "dk_fade_exit", "intrapos_dd_stop"}:
+            if reentry_enabled and action in {
+                "stop_loss",
+                "trailing_stop",
+                "atr_stop",
+                "atr_trailing_stop",
+                "profit_lock",
+                "market_exit",
+                "time_stop",
+                "dk_fade_exit",
+                "intrapos_dd_stop",
+            }:
                 cooldown_remaining = reentry_cooldown
         equity[i] = shares * float(df.loc[i, "close"]) if in_pos else cash
         peak_equity = max(peak_equity, equity[i])
@@ -745,18 +848,28 @@ def run_single_stock_backtest(
                 if dd_from_peak > intrapos_dd_limit_val:
                     forced_reason = "intrapos_dd_stop"
             # Phase 4.1 — profit lock: activate tighter trailing after trigger
-            if not forced_reason and profit_lock_enabled and np.isfinite(close_px) and np.isfinite(entry_price):
-                if not profit_lock_active and close_px / entry_price - 1.0 >= profit_lock_trigger:
+            if (
+                not forced_reason
+                and profit_lock_enabled
+                and entry_profit_lock_trigger > 0
+                and entry_profit_lock_trailing > 0
+                and np.isfinite(close_px)
+                and np.isfinite(entry_price)
+            ):
+                if not profit_lock_active and close_px / entry_price - 1.0 >= entry_profit_lock_trigger:
                     profit_lock_active = True
                     profit_lock_high = close_px
                 if profit_lock_active:
                     profit_lock_high = max(profit_lock_high, close_px)
-                    if close_px / profit_lock_high - 1.0 < -profit_lock_trailing:
+                    if close_px / profit_lock_high - 1.0 < -entry_profit_lock_trailing:
                         forced_reason = "profit_lock"
             # Phase 4.1 — market exit: index below MA60 or sharp drop
             if not forced_reason and market_exit and _idx_ma60_below is not None and i < len(_idx_ma60_below):
                 if _idx_ma60_below[i] or (_idx_drop20 is not None and i < len(_idx_drop20) and _idx_drop20[i]):
                     forced_reason = "market_exit"
+            if not forced_reason and sector_exit and _sector_exit_flags is not None and i < len(_sector_exit_flags):
+                if bool(_sector_exit_flags[i]):
+                    forced_reason = "sector_exit"
             # Phase 4.1 — time stop: exit after N days if return below threshold
             if not forced_reason and time_stop_enabled and np.isfinite(close_px) and np.isfinite(entry_price):
                 _hold = (pd.Timestamp(df.loc[i, "trade_date"]) - entry_date).days
@@ -836,6 +949,8 @@ def run_single_stock_backtest(
     atr_trailing_exits = int((trade_log["exit_reason"] == "atr_trailing_stop").sum()) if not trade_log.empty else 0
     profit_lock_exits = int((trade_log["exit_reason"] == "profit_lock").sum()) if not trade_log.empty else 0
     market_exit_exits = int((trade_log["exit_reason"] == "market_exit").sum()) if not trade_log.empty else 0
+    if not trade_log.empty:
+        market_exit_exits += int((trade_log["exit_reason"] == "sector_exit").sum())
     time_stop_exits = int((trade_log["exit_reason"] == "time_stop").sum()) if not trade_log.empty else 0
     dk_fade_exits = int((trade_log["exit_reason"] == "dk_fade_exit").sum()) if not trade_log.empty else 0
     intrapos_dd_exits = int((trade_log["exit_reason"] == "intrapos_dd_stop").sum()) if not trade_log.empty else 0

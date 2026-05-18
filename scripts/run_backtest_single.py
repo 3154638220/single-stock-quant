@@ -16,7 +16,6 @@ if str(ROOT) not in sys.path:
 
 from src.backtest.config import build_bt_kwargs
 from src.backtest.single_stock import run_single_stock_backtest
-from src.backtest.transaction_costs import TransactionCostParams, transaction_cost_params_from_mapping
 from src.backtest.wfo import _fit_meta_model_for_fold
 from src.data_fetcher.db_manager import DuckDBManager
 from src.data_fetcher.stock_name_cache import resolve_stock_name_cache_path, resolve_stock_names
@@ -142,15 +141,28 @@ def main() -> int:
 
     cfg = load_config(args.config)
     symbol = str(args.symbol).strip().zfill(6)
+    bt_cfg = cfg.get("backtest", {}) or {}
     risk_cfg = cfg.get("risk", {}) or {}
     benchmark_symbol = str(risk_cfg.get("benchmark_symbol", "510300")).strip().zfill(6)
+    sector_index_symbol = str(bt_cfg.get("sector_index_symbol", "")).strip().zfill(6)
     name_cache_path = Path(args.stock_name_cache).expanduser() if args.stock_name_cache else resolve_stock_name_cache_path(cfg)
     stock_name = resolve_stock_names([symbol], name_cache_path).get(symbol, symbol)
     with DuckDBManager(config_path=args.config, duckdb_path=args.duckdb_path) as db:
         symbols_to_read = [symbol]
         if bool(risk_cfg.get("enable_index_filter", False)) and benchmark_symbol not in symbols_to_read:
             symbols_to_read.append(benchmark_symbol)
+        if str(bt_cfg.get("market_exit_mode", "off")).lower() == "sector" and sector_index_symbol not in {"", "000000"}:
+            if sector_index_symbol not in symbols_to_read:
+                symbols_to_read.append(sector_index_symbol)
         all_df = db.read_daily_frame(symbols=symbols_to_read, start=args.start, end=args.end)
+        sector_table_df = None
+        if str(bt_cfg.get("market_exit_mode", "off")).lower() == "sector" and sector_index_symbol not in {"", "000000"}:
+            sector_table_df = db.connection.execute(
+                """
+                SELECT table_name FROM information_schema.tables
+                WHERE table_name = 'sector_index'
+                """
+            ).df()
     df = all_df[all_df["symbol"].astype(str) == symbol].copy()
     index_df = all_df[all_df["symbol"].astype(str) == benchmark_symbol].copy() if benchmark_symbol in set(all_df.get("symbol", [])) else None
     if df.empty:
@@ -161,6 +173,14 @@ def main() -> int:
     selected_mode = args.mode or ("macd_cross" if use_consensus else configured_mode)
     modes = [m.value for m in TrendMode] if args.compare_modes else [selected_mode]
     base_kwargs = _bt_kwargs(cfg, index_ohlcv=index_df)
+    if str(bt_cfg.get("market_exit_mode", "off")).lower() == "sector" and sector_index_symbol not in {"", "000000"}:
+        sector_df = all_df[all_df["symbol"].astype(str).str.zfill(6) == sector_index_symbol].copy()
+        if sector_df.empty and sector_table_df is not None and not sector_table_df.empty:
+            with DuckDBManager(config_path=args.config, duckdb_path=args.duckdb_path, table_daily="sector_index") as sector_db:
+                sector_df = sector_db.read_daily_frame(symbols=[sector_index_symbol], start=args.start, end=args.end)
+        if sector_df.empty:
+            raise SystemExit(f"no sector index data found for {sector_index_symbol}; fetch it first")
+        base_kwargs["sector_index_ohlcv"] = sector_df
     if args.meta_label_mode is not None:
         base_kwargs["meta_label_mode"] = args.meta_label_mode
     if args.meta_label_threshold is not None:

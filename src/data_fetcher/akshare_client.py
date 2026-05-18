@@ -26,6 +26,7 @@ except ModuleNotFoundError:  # pragma: no cover - 取决于运行环境是否安
         stock_info_a_code_name = _missing
         stock_zh_a_daily = _missing
         stock_zh_a_hist = _missing
+        fund_etf_hist_em = _missing
 
     ak = _MissingAkShare()
 
@@ -300,6 +301,42 @@ def fetch_a_share_daily(
     if first_exc is not None:
         raise first_exc
     return _empty_daily_frame()
+
+
+def fetch_etf_daily(
+    symbol: str,
+    start_date: str,
+    end_date: str,
+    *,
+    adjust: str = "qfq",
+    timeout_sec: float = 10.0,
+    config: Optional[dict] = None,
+) -> pd.DataFrame:
+    """Fetch an ETF daily series via AkShare Eastmoney ETF history."""
+    code = symbol.strip().zfill(6)
+    if len(code) != 6 or not code.isdigit():
+        raise ValueError(f"ETF symbol 须为 6 位数字，收到: {symbol!r}")
+
+    cfg = config or _load_config(None)
+    install_akshare_requests_resilience(cfg)
+    ak_mod = _require_akshare()
+
+    def _fetch() -> pd.DataFrame:
+        raw = ak_mod.fund_etf_hist_em(
+            symbol=code,
+            period="daily",
+            start_date=start_date.replace("-", ""),
+            end_date=end_date.replace("-", ""),
+            adjust=adjust,
+        )
+        if raw is None or raw.empty:
+            return _empty_daily_frame()
+        df = _fill_derived_daily_fields(_standardize_daily_df(raw, code))
+        start_ts = pd.Timestamp(start_date).normalize()
+        end_ts = pd.Timestamp(end_date).normalize()
+        return df[(df["trade_date"] >= start_ts) & (df["trade_date"] <= end_ts)].reset_index(drop=True)
+
+    return call_with_timeout(_fetch, timeout_sec=timeout_sec, label=f"fund_etf_hist_em:{code}")
 
 
 def _project_root() -> Path:

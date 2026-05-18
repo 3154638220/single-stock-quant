@@ -1,7 +1,13 @@
-from .akshare_client import fetch_a_share_daily, fill_derived_daily_fields, list_default_universe_symbols
+from .akshare_client import (
+    fetch_a_share_daily,
+    fetch_etf_daily,
+    fill_derived_daily_fields,
+    list_default_universe_symbols,
+)
 
 __all__ = [
     "fetch_a_share_daily",
+    "fetch_etf_daily",
     "fill_derived_daily_fields",
     "list_default_universe_symbols",
     "DuckDBManager",

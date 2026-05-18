@@ -1,0 +1,49 @@
+# WFO constraints for 000783 (Changjiang Securities).
+# Allows low-frequency but high-quality entries to survive IS scoring, then
+# tests profit-lock reentry and dynamic HQ exit targets in OOS.
+
+backtest:
+  stop_loss_pct: 0.08
+  time_stop_days: 45
+  time_stop_min_return: 0.02
+  profit_lock_trigger: 0.10
+  profit_lock_trailing: 0.05
+  stop_reentry_enabled: true
+  stop_reentry_cooldown: 3
+  stop_reentry_min_run: 2
+  dk_fade_exit_n: 0
+
+signal_filter:
+  volume_confirm: true
+  volume_ratio_min: 1.0
+
+wfo:
+  train_days: 504
+  oos_days: 126
+  step_days: 126
+  min_trades_per_year: 1.0
+  max_trades_per_year: 25.0
+  max_drawdown_limit: 0.30
+  n_jobs: 4
+  param_grid:
+    macd_fast: [10, 12, 14]
+    macd_slow: [22, 26]
+    macd_signal: [8, 9]
+    min_run_len: [1, 2]
+    profit_lock_trigger: [0.08, 0.10, 0.12]
+    profit_lock_trailing: [0.04, 0.05]
+    profit_lock_trigger_hq: [0.15, 0.18]
+    profit_lock_trailing_hq: [0.06, 0.08]
+    quality_hq_threshold: [65.0, 75.0]
+    stop_reentry_enabled: [true, false]
+    stop_reentry_cooldown: [2, 3]
+    require_price_breakout: [true, false]
+    breakout_lookback: [15, 20]
+  fast_grid:
+    macd_fast: [10, 12, 14]
+    macd_slow: [22, 26]
+    macd_signal: [8, 9]
+    min_run_len: [1, 2]
+    profit_lock_trigger: [0.10, 0.15]
+    profit_lock_trailing: [0.05, 0.06]
+

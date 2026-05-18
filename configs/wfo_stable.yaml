@@ -1,6 +1,8 @@
 # WFO: stable return-quality config.
 # 2026-05-18 plan baseline: 2y train + 6m OOS to lift fold count from ~3 to
 # 6-8 on symbols with 2020+ daily data, with a widened MACD/exit grid.
+# 2026-05-19 cleanup: dk_fade_exit_n is fixed off after MFE diagnostics showed
+# it exits during normal trend consolidation and wastes search space.
 
 backtest:
   stop_loss_pct: 0.08
@@ -27,5 +29,4 @@ wfo:
     min_run_len: [1, 2]
     profit_lock_trigger: [0.10, 0.12, 0.15]
     profit_lock_trailing: [0.04, 0.05, 0.06]
-    dk_fade_exit_n: [0, 2, 3, 5]
-  # 4×3×4×2×3×3×4 = 3456 combinations; use for final verification.
+  # 4×3×4×2×3×3 = 864 combinations; use for final verification.
