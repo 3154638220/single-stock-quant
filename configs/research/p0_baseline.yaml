@@ -1,0 +1,49 @@
+# P0 baseline for the 2026-05-19 filter experiments.
+# All entry filters are off; exits use the simple profit-lock reference layer.
+
+paths:
+  output_dir: data/output/experiments/plan_05_19
+
+backtest:
+  stop_loss_pct: 0.08
+  time_stop_days: 30
+  time_stop_min_return: 0.03
+  profit_lock_trigger: 0.12
+  profit_lock_trailing: 0.05
+  atr_trailing_mult: 0.0
+  atr_trailing_min_gain: 0.0
+  dk_fade_exit_n: 0
+  market_exit_mode: off
+
+signal_filter:
+  volume_confirm: true
+  require_above_ma120: false
+  require_positive_rs60: false
+  require_index_trend_bullish: false
+  require_weekly_bullish: false
+  require_price_breakout: false
+  require_adx_min: 0
+  require_pullback_entry: false
+
+wfo:
+  train_days: 504
+  oos_days: 126
+  step_days: 126
+  min_trades_per_year: 1.0
+  max_trades_per_year: 30.0
+  max_drawdown_limit: 0.35
+  n_jobs: 4
+  param_grid:
+    macd_fast: [8, 10, 12, 14]
+    macd_slow: [22, 26, 30]
+    macd_signal: [7, 8, 9, 10]
+    min_run_len: [1, 2]
+    profit_lock_trigger: [0.12]
+    profit_lock_trailing: [0.05]
+  fast_grid:
+    macd_fast: [10, 12]
+    macd_slow: [22, 26]
+    macd_signal: [8, 9]
+    min_run_len: [1, 2]
+    profit_lock_trigger: [0.12]
+    profit_lock_trailing: [0.05]

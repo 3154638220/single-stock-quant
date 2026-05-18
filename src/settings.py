@@ -162,6 +162,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "meta_label_threshold": 0.50,
         "require_above_ma120": False,
         "require_positive_rs60": False,
+        "require_index_trend_bullish": False,
         "require_weekly_bullish": False,
         "weekly_ma_fast": 5,
         "weekly_ma_slow": 13,

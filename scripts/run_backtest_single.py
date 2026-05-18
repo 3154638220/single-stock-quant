@@ -127,6 +127,7 @@ def main() -> int:
     parser.add_argument("--meta-label-min-samples", type=int, default=10, help="Minimum BUY samples needed to train the meta-label model")
     parser.add_argument("--require-above-ma120", action="store_true", help="Only allow BUY signals when close is above MA120")
     parser.add_argument("--require-positive-rs60", action="store_true", help="Only allow BUY signals that outperform the benchmark over 60 bars")
+    parser.add_argument("--require-index-trend-bullish", action="store_true", help="Only allow BUY signals when benchmark MACD histogram is positive")
     parser.add_argument("--require-weekly-bullish", action="store_true", help="Only allow BUY signals when weekly trend is bullish")
     parser.add_argument("--weekly-ma-fast", type=int, help="Fast weekly MA window for --require-weekly-bullish")
     parser.add_argument("--weekly-ma-slow", type=int, help="Slow weekly MA window for --require-weekly-bullish")
@@ -142,6 +143,7 @@ def main() -> int:
     cfg = load_config(args.config)
     symbol = str(args.symbol).strip().zfill(6)
     bt_cfg = cfg.get("backtest", {}) or {}
+    filt_cfg = cfg.get("signal_filter", {}) or {}
     risk_cfg = cfg.get("risk", {}) or {}
     benchmark_symbol = str(risk_cfg.get("benchmark_symbol", "510300")).strip().zfill(6)
     sector_index_symbol = str(bt_cfg.get("sector_index_symbol", "")).strip().zfill(6)
@@ -149,7 +151,15 @@ def main() -> int:
     stock_name = resolve_stock_names([symbol], name_cache_path).get(symbol, symbol)
     with DuckDBManager(config_path=args.config, duckdb_path=args.duckdb_path) as db:
         symbols_to_read = [symbol]
-        if bool(risk_cfg.get("enable_index_filter", False)) and benchmark_symbol not in symbols_to_read:
+        needs_benchmark = (
+            bool(risk_cfg.get("enable_index_filter", False))
+            or bool(risk_cfg.get("enable_index_ma20_filter", False))
+            or bool(filt_cfg.get("require_positive_rs60", False))
+            or bool(filt_cfg.get("require_index_trend_bullish", False))
+            or bool(args.require_positive_rs60)
+            or bool(args.require_index_trend_bullish)
+        )
+        if needs_benchmark and benchmark_symbol not in symbols_to_read:
             symbols_to_read.append(benchmark_symbol)
         if str(bt_cfg.get("market_exit_mode", "off")).lower() == "sector" and sector_index_symbol not in {"", "000000"}:
             if sector_index_symbol not in symbols_to_read:
@@ -189,6 +199,8 @@ def main() -> int:
         base_kwargs["require_above_ma120"] = True
     if args.require_positive_rs60:
         base_kwargs["require_positive_rs60"] = True
+    if args.require_index_trend_bullish:
+        base_kwargs["require_index_trend_bullish"] = True
     if args.require_weekly_bullish:
         base_kwargs["require_weekly_bullish"] = True
     if args.weekly_ma_fast is not None:

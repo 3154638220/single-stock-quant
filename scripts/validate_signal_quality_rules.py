@@ -24,6 +24,7 @@ if str(ROOT) not in sys.path:
 from src.data_fetcher.db_manager import DuckDBManager
 from src.indicators import DKTrendParams, compute_dktrend
 from src.settings import load_config
+from src.signals.generator import compute_signal_quality
 
 
 def _mann_whitney_p(a: np.ndarray, b: np.ndarray) -> float:
@@ -130,6 +131,7 @@ def main() -> int:
 
     params = DKTrendParams.from_mapping(dict(cfg.get("trend_signal", {}) or {}))
     rows: list[dict] = []
+    score_rows: list[dict] = []
     for symbol in symbols:
         df = data[data["symbol"].astype(str).str.zfill(6) == symbol].copy().reset_index(drop=True)
         if df.empty:
@@ -140,6 +142,20 @@ def main() -> int:
         buy_mask = trend["dk_signal"].astype(str).eq("buy")
         close = pd.to_numeric(df["close"], errors="coerce")
         forward_ret = close.shift(-int(args.forward_days)) / close - 1.0
+        quality = compute_signal_quality(trend, market_returns=market_returns)
+        valid_score = buy_mask & quality.notna() & forward_ret.notna()
+        score_rows.append(
+            {
+                "symbol": symbol,
+                "n_buy_signals": int(valid_score.sum()),
+                "forward_days": int(args.forward_days),
+                "spearman_quality_forward_return": (
+                    float(quality[valid_score].corr(forward_ret[valid_score], method="spearman"))
+                    if int(valid_score.sum()) >= 3
+                    else float("nan")
+                ),
+            }
+        )
         rule_df = _rule_frame(df, trend, market_returns)
         for rule in rule_df.columns:
             rows.append(_summarize_rule(symbol, rule, rule_df[rule] & buy_mask, forward_ret.where(buy_mask)))
@@ -149,7 +165,13 @@ def main() -> int:
     result = pd.DataFrame(rows)
     out_path = out_dir / "signal_quality_rule_validation.csv"
     result.to_csv(out_path, index=False)
+    score_result = pd.DataFrame(score_rows)
+    score_out_path = out_dir / "signal_quality_score_validation.csv"
+    score_result.to_csv(score_out_path, index=False)
     print(f"written {out_path}")
+    print(f"written {score_out_path}")
+    if not score_result.empty:
+        print(score_result.to_string(index=False))
     if not result.empty:
         ranked = result.assign(edge=result["median_true"] - result["median_false"]).sort_values("edge", ascending=False)
         print(ranked[["symbol", "rule", "n_true", "n_false", "edge", "cliffs_d", "mann_whitney_p"]].to_string(index=False))

@@ -1,5 +1,3 @@
-import numpy as np
-
 from src.backtest.config import build_bt_kwargs
 from src.backtest.transaction_costs import TransactionCostParams
 
@@ -29,6 +27,7 @@ def test_build_bt_kwargs_minimal_config():
     assert kw["stop_reentry_cooldown"] == 3
     assert kw["stop_reentry_min_run"] == 2
     assert kw["require_weekly_bullish"] is False
+    assert kw["require_index_trend_bullish"] is False
     assert kw["weekly_ma_fast"] == 5
     assert kw["weekly_ma_slow"] == 13
     assert kw["volatility_high_vol_multiple"] == 1.5

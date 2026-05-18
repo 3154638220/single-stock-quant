@@ -54,6 +54,7 @@ def build_bt_kwargs(cfg: dict[str, Any], *, index_ohlcv: pd.DataFrame | None = N
         "meta_label_mode": str(filt_cfg.get("meta_label_mode", "off")),
         "require_above_ma120": bool(filt_cfg.get("require_above_ma120", False)),
         "require_positive_rs60": bool(filt_cfg.get("require_positive_rs60", False)),
+        "require_index_trend_bullish": bool(filt_cfg.get("require_index_trend_bullish", False)),
         "require_weekly_bullish": bool(filt_cfg.get("require_weekly_bullish", False)),
         "weekly_ma_fast": int(filt_cfg.get("weekly_ma_fast", 5)),
         "weekly_ma_slow": int(filt_cfg.get("weekly_ma_slow", 13)),

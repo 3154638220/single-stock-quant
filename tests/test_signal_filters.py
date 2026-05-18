@@ -8,7 +8,7 @@ from src.signals import (
     generate_signals,
 )
 from src.signals.generator import compute_signal_quality
-from src.signals.types import Position, Signal
+from src.signals.types import Signal
 
 
 def _df(closes: list[float], extra: dict | None = None) -> pd.DataFrame:
@@ -188,6 +188,36 @@ class TestSingleStockEntryFilters:
             trend_override=trend,
             index_ohlcv=index_df,
             require_positive_rs60=True,
+        )
+
+        assert baseline.n_trades == 1
+        assert filtered.n_trades == 0
+
+    def test_require_index_trend_bullish_blocks_when_index_macd_hist_negative(self):
+        closes = [10.0] * 80
+        df = _df(closes)
+        index_closes = list(pd.Series(range(200, 120, -1), dtype=float))
+        index_df = _df(index_closes, extra={"symbol": ["510300"] * len(index_closes)})
+        trend = _trend_override(df, buy_idx=60)
+
+        baseline = run_single_stock_backtest(
+            "600000",
+            df,
+            DKTrendParams(mode=TrendMode.MACD_CROSS),
+            cost_bps=0,
+            initial_capital=10000,
+            trend_override=trend,
+            index_ohlcv=index_df,
+        )
+        filtered = run_single_stock_backtest(
+            "600000",
+            df,
+            DKTrendParams(mode=TrendMode.MACD_CROSS),
+            cost_bps=0,
+            initial_capital=10000,
+            trend_override=trend,
+            index_ohlcv=index_df,
+            require_index_trend_bullish=True,
         )
 
         assert baseline.n_trades == 1

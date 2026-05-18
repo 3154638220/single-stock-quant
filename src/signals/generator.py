@@ -90,21 +90,19 @@ def compute_signal_quality(
     """Score each BUY signal (0-100) based on confirming evidence.
 
     Points (max 100):
-    - +15: color run_len >= 2
+    - +10: close > close.shift(3) (short-term price momentum)
     - +15: volume >= volume_ratio_min * avg volume
-    - +15: resonance count == 3 (if available)
+    - +8: resonance count >= 2 (if available)
     - +10: market return > 0 over market_lookback
-    - +10: current ATR < median ATR over atr_lookback
+    - +10: ATR percentile rank in the middle range (0.3-0.8)
     - +10: close > MA20 (trend direction)
     - +10: MA20 slope > 0 (trend momentum)
+    - +12: DK value above its 5-day mean (momentum acceleration)
+    - +10: close at least 20% above 52-week low
     - +15: RS_60 > 0 (relative strength vs index)
     """
     scores = pd.Series(0.0, index=trend.index, dtype="float64")
     buy_mask = trend["dk_signal"] == "buy"
-
-    # run_len >= 2
-    run_len = trend.get("dk_run_len", pd.Series(0, index=trend.index))
-    scores.loc[buy_mask & (run_len >= 2)] += 15
 
     # volume confirmation
     if "volume" in trend.columns:
@@ -114,7 +112,7 @@ def compute_signal_quality(
 
     # resonance
     if "consensus_red_count" in trend.columns:
-        scores.loc[buy_mask & (trend["consensus_red_count"] >= 3)] += 15
+        scores.loc[buy_mask & (trend["consensus_red_count"] >= 2)] += 8
 
     # market regime
     if market_returns is not None and not market_returns.empty:
@@ -127,24 +125,40 @@ def compute_signal_quality(
     # Extract close for trend-checks (used by ATR + trend-strength blocks below)
     close = pd.to_numeric(trend["close"], errors="coerce") if "close" in trend.columns else pd.Series(dtype=float)
 
-    # low-volatility entry (ATR below median)
+    # Medium-volatility entry: avoid both dead volatility and panic volatility.
     if all(c in trend.columns for c in ("high", "low", "close")):
         high = pd.to_numeric(trend["high"], errors="coerce")
         low = pd.to_numeric(trend["low"], errors="coerce")
         prev_close = close.shift(1)
         tr = pd.concat([high - low, (high - prev_close).abs(), (low - prev_close).abs()], axis=1).max(axis=1)
         atr = tr.rolling(14, min_periods=14).mean()
-        atr_median = atr.rolling(atr_lookback, min_periods=atr_lookback).median()
-        scores.loc[buy_mask & (atr < atr_median)] += 10
+        atr_rank = atr.rolling(atr_lookback, min_periods=atr_lookback).apply(
+            lambda x: pd.Series(x).rank(pct=True).iloc[-1],
+            raw=False,
+        )
+        scores.loc[buy_mask & (atr_rank > 0.3) & (atr_rank < 0.8)] += 10
 
     # trend direction: close > MA20
     if close.notna().any():
+        # Short-term price momentum replaces the old dk_run_len rule, which is
+        # uninformative for first-day BUY transitions.
+        scores.loc[buy_mask & (close > close.shift(3))] += 10
+
         ma20 = close.rolling(20, min_periods=20).mean()
         scores.loc[buy_mask & (close > ma20)] += 10
 
         # trend momentum: MA20 slope > 0
         ma20_slope = ma20 - ma20.shift(trend_strength_lookback)
         scores.loc[buy_mask & (ma20_slope > 0)] += 10
+
+        if "dk_value" in trend.columns:
+            dk_value = pd.to_numeric(trend["dk_value"], errors="coerce")
+            dk_mean = dk_value.rolling(5, min_periods=5).mean()
+            scores.loc[buy_mask & (dk_value > dk_mean)] += 12
+
+        low_52w = close.rolling(252, min_periods=120).min()
+        dist_from_low = close / low_52w - 1.0
+        scores.loc[buy_mask & (dist_from_low > 0.20)] += 10
 
         # relative strength: stock has outperformed index over 60 days
         if market_returns is not None and not market_returns.empty:

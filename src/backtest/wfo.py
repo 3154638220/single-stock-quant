@@ -30,6 +30,7 @@ DEFAULT_PARAM_GRID: dict[str, list] = {
 # 2026-05-18 return-improvement grid (4×3×4×2×3×3 = 864 combos).
 # It keeps the search in the MACD + exit layer where historical experiments
 # found the most reliable return leverage.
+# 2026-05-19 cleanup: dk_fade_exit_n removed after diagnostics showed no edge.
 EXTENDED_PARAM_GRID: dict[str, list] = {
     "macd_fast": [8, 10, 12, 14],
     "macd_slow": [22, 26, 30],
@@ -37,7 +38,6 @@ EXTENDED_PARAM_GRID: dict[str, list] = {
     "min_run_len": [1, 2],
     "profit_lock_trigger": [0.10, 0.12, 0.15],
     "profit_lock_trailing": [0.04, 0.05, 0.06],
-    "dk_fade_exit_n": [0, 2, 3, 5],
 }
 
 FOCUSED_PARAM_GRID: dict[str, list] = EXTENDED_PARAM_GRID
@@ -57,7 +57,7 @@ _BT_PARAM_KEYS = {
     "volatility_target_ann", "volatility_lookback",
     "drawdown_throttle_enabled",
     "meta_label_threshold", "meta_label_mode",
-    "require_above_ma120", "require_positive_rs60",
+    "require_above_ma120", "require_positive_rs60", "require_index_trend_bullish",
     "require_weekly_bullish", "weekly_ma_fast", "weekly_ma_slow",
     "volatility_high_vol_multiple", "volatility_high_vol_scale",
     "dk_fade_exit_n", "intrapos_dd_limit",
@@ -86,7 +86,7 @@ _VALID_BT_KWARGS = {
     "volatility_target_ann", "volatility_lookback",
     "drawdown_throttle_enabled",
     "meta_model", "meta_label_threshold", "meta_label_mode",
-    "require_above_ma120", "require_positive_rs60",
+    "require_above_ma120", "require_positive_rs60", "require_index_trend_bullish",
     "require_weekly_bullish", "weekly_ma_fast", "weekly_ma_slow",
     "volatility_high_vol_multiple", "volatility_high_vol_scale",
     "dk_fade_exit_n", "intrapos_dd_limit",
@@ -160,6 +160,7 @@ def _composite_score(
     w_dd_score: float = 0.15,
     w_total_return: float = 0.15,
     w_trade_freq: float = 0.10,
+    reliability_mode: str = "standard",
 ) -> float:
     """Return-quality composite objective score.
 
@@ -181,6 +182,8 @@ def _composite_score(
     calmar = np.clip(res.calmar_ratio, -1.0, 3.0) if np.isfinite(res.calmar_ratio) else -1.0
     total_ret = np.clip(res.total_return, -0.5, 1.0) if np.isfinite(res.total_return) else -0.5
     dd_score = max(0.0, 1.0 - res.max_drawdown * 2.0) if np.isfinite(res.max_drawdown) else 0.0
+    mode = str(reliability_mode).lower()
+    effective_w_trade_freq = 0.0 if mode == "quality_first" else float(w_trade_freq)
     trade_freq_score = min(float(n_per_year) / 10.0, 1.0)
 
     raw_score = (
@@ -188,10 +191,13 @@ def _composite_score(
         + w_sharpe * sharpe
         + w_dd_score * dd_score
         + w_total_return * total_ret
-        + w_trade_freq * trade_freq_score
+        + effective_w_trade_freq * trade_freq_score
     )
-    reliability = min(1.0, max(float(res.n_trades), 0.0) / 10.0)
-    reliability = max(reliability, 0.30)
+    if mode == "quality_first":
+        reliability = 1.0
+    else:
+        reliability = min(1.0, max(float(res.n_trades), 0.0) / 10.0)
+        reliability = max(reliability, 0.30)
     return raw_score * reliability if raw_score >= 0 else raw_score / reliability
 
 
@@ -273,6 +279,7 @@ def _eval_wfo_combo(task: tuple[Any, ...]) -> float:
         score_min_trades_per_year,
         score_max_trades_per_year,
         score_max_drawdown_limit,
+        score_reliability_mode,
     ) = task
     params, combo_bt = _params_with(base, combo, mode_value)
     bt = {**base_bt, **combo_bt}
@@ -291,6 +298,7 @@ def _eval_wfo_combo(task: tuple[Any, ...]) -> float:
             min_trades_per_year=float(score_min_trades_per_year),
             max_trades_per_year=float(score_max_trades_per_year),
             max_drawdown_limit=float(score_max_drawdown_limit),
+            reliability_mode=str(score_reliability_mode),
         )
     )
 
@@ -793,6 +801,7 @@ def run_walk_forward_optimization(
     score_min_trades_per_year: float = 2.0,
     score_max_trades_per_year: float = 30.0,
     score_max_drawdown_limit: float = 0.35,
+    score_reliability_mode: str = "standard",
     n_jobs: int = 1,
 ) -> dict[str, Any]:
     """Run rolling or expanding WFO and return a JSON-serializable report."""
@@ -846,6 +855,7 @@ def run_walk_forward_optimization(
                     score_min_trades_per_year,
                     score_max_trades_per_year,
                     score_max_drawdown_limit,
+                    score_reliability_mode,
                 )
                 for combo in combos
             ]
@@ -867,6 +877,7 @@ def run_walk_forward_optimization(
                         score_min_trades_per_year,
                         score_max_trades_per_year,
                         score_max_drawdown_limit,
+                        score_reliability_mode,
                     )
                 )
                 for combo in combos
@@ -992,6 +1003,7 @@ def run_walk_forward_optimization(
         "meta_label_mode": str(meta_label_mode) if enable_meta_label else "off",
         "meta_label_threshold": float(meta_label_threshold),
         "stability_weighting": bool(stability_weighting),
+        "score_reliability_mode": str(score_reliability_mode),
         "n_jobs": int(n_jobs),
         "oos_panels": oos_panel_dicts,
         "aggregated": aggregated,
@@ -1032,6 +1044,7 @@ def run_nested_walk_forward_optimization(
     score_min_trades_per_year: float = 2.0,
     score_max_trades_per_year: float = 30.0,
     score_max_drawdown_limit: float = 0.35,
+    score_reliability_mode: str = "standard",
     n_jobs: int = 1,
 ) -> dict[str, Any]:
     """Nested walk-forward optimisation.
@@ -1105,6 +1118,7 @@ def run_nested_walk_forward_optimization(
             score_min_trades_per_year=float(score_min_trades_per_year),
             score_max_trades_per_year=float(score_max_trades_per_year),
             score_max_drawdown_limit=float(score_max_drawdown_limit),
+            score_reliability_mode=str(score_reliability_mode),
             n_jobs=int(n_jobs),
         )
 
@@ -1226,6 +1240,7 @@ def run_nested_walk_forward_optimization(
         "meta_label_mode": str(meta_label_mode) if enable_meta_label else "off",
         "meta_label_threshold": float(meta_label_threshold),
         "stability_weighting": bool(stability_weighting),
+        "score_reliability_mode": str(score_reliability_mode),
         "n_jobs": int(n_jobs),
         "outer_folds": outer_fold_results,
         "aggregated": aggregated,

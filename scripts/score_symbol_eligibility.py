@@ -4,7 +4,7 @@
 Computes a composite score (0-100) for each symbol based on:
   1. Trend quality (30%): consistency of price direction during DK red periods
   2. Rolling IS Sharpe (40%): 2-year rolling window backtest Sharpe
-  3. Signal frequency (15%): annualised BUY signals (target 4-12)
+  3. Signal frequency (15%): annualised BUY signals (target 1-12)
   4. Liquidity (15%): average daily turnover in yuan
 """
 
@@ -69,13 +69,14 @@ def _signal_frequency_score(df: pd.DataFrame, params: DKTrendParams) -> tuple[fl
     n_days = len(df)
     n_years = max(n_days / 252.0, 0.5)
     annual = n_buy / n_years
-    # Score: 4-12 per year is ideal, penalties outside
-    if 4 <= annual <= 12:
+    # Score: 1-12 per year is acceptable. Slow trend leaders can be valuable
+    # with only one or two high-quality BUY signals per year.
+    if 1 <= annual <= 12:
         return 1.0, annual
-    elif annual < 1:
+    elif annual < 0.5:
         return 0.0, annual
-    elif annual < 4:
-        return annual / 4.0, annual
+    elif annual < 1:
+        return (annual - 0.5) / 0.5, annual
     elif annual <= 20:
         return 1.0 - (annual - 12) / 8.0, annual
     else:

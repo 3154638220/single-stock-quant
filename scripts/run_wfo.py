@@ -61,6 +61,7 @@ def main() -> int:
     parser.add_argument("--volatility-high-vol-scale", type=float, help="Maximum position multiplier when high-volatility trigger fires")
     parser.add_argument("--n-jobs", type=int, help="Parallel workers for parameter-grid scoring")
     parser.add_argument("--grid-key", default="param_grid", help="wfo config grid key to use, e.g. param_grid or fast_grid")
+    parser.add_argument("--experiment-id", help="Optional experiment id used in exported result filename/metadata")
     parser.add_argument("--export-results", action="store_true")
     parser.add_argument("--plot-heatmap", action="store_true")
     parser.add_argument("--config", help="Config file path")
@@ -75,6 +76,7 @@ def main() -> int:
     score_min_trades_per_year = float(wfo_cfg.get("min_trades_per_year", 2.0))
     score_max_trades_per_year = float(wfo_cfg.get("max_trades_per_year", 30.0))
     score_max_drawdown_limit = float(wfo_cfg.get("max_drawdown_limit", 0.35))
+    score_reliability_mode = str(wfo_cfg.get("reliability_mode", "standard"))
     n_jobs = int(args.n_jobs if args.n_jobs is not None else wfo_cfg.get("n_jobs", 1))
     param_grid = wfo_cfg.get(str(args.grid_key))
     if param_grid is None:
@@ -82,11 +84,20 @@ def main() -> int:
     selected_mode = args.mode or str((cfg.get("trend_signal", {}) or {}).get("mode", "macd_cross"))
     symbol = str(args.symbol).strip().zfill(6)
     bt_cfg = cfg.get("backtest", {}) or {}
+    filt_cfg = cfg.get("signal_filter", {}) or {}
     risk_cfg = cfg.get("risk", {}) or {}
     benchmark_symbol = str(risk_cfg.get("benchmark_symbol", "510300")).strip().zfill(6)
     sector_index_symbol = str(bt_cfg.get("sector_index_symbol", "")).strip().zfill(6)
     symbols_to_read = [symbol]
-    if bool(risk_cfg.get("enable_index_filter", False)) and benchmark_symbol not in symbols_to_read:
+    needs_benchmark = (
+        bool(risk_cfg.get("enable_index_filter", False))
+        or bool(risk_cfg.get("enable_index_ma20_filter", False))
+        or bool(filt_cfg.get("require_positive_rs60", False))
+        or bool(filt_cfg.get("require_index_trend_bullish", False))
+        or "require_positive_rs60" in param_grid
+        or "require_index_trend_bullish" in param_grid
+    )
+    if needs_benchmark and benchmark_symbol not in symbols_to_read:
         symbols_to_read.append(benchmark_symbol)
     if str(bt_cfg.get("market_exit_mode", "off")).lower() == "sector" and sector_index_symbol not in {"", "000000"}:
         if sector_index_symbol not in symbols_to_read:
@@ -165,6 +176,7 @@ def main() -> int:
             score_min_trades_per_year=score_min_trades_per_year,
             score_max_trades_per_year=score_max_trades_per_year,
             score_max_drawdown_limit=score_max_drawdown_limit,
+            score_reliability_mode=score_reliability_mode,
             n_jobs=n_jobs,
         )
 
@@ -222,6 +234,7 @@ def main() -> int:
             score_min_trades_per_year=score_min_trades_per_year,
             score_max_trades_per_year=score_max_trades_per_year,
             score_max_drawdown_limit=score_max_drawdown_limit,
+            score_reliability_mode=score_reliability_mode,
             n_jobs=n_jobs,
         )
 
@@ -265,7 +278,12 @@ def main() -> int:
     if args.export_results:
         out_dir = project_root() / str(cfg.get("paths", {}).get("output_dir", "data/output"))
         out_dir.mkdir(parents=True, exist_ok=True)
-        path = out_dir / f"{symbol}_wfo_{datetime.now().strftime('%Y%m%d')}.json"
+        if args.experiment_id:
+            result["experiment_id"] = str(args.experiment_id)
+            result["plan_version"] = "05-19"
+            result["grid_key"] = str(args.grid_key)
+        filename = f"{args.experiment_id}.json" if args.experiment_id else f"{symbol}_wfo_{datetime.now().strftime('%Y%m%d')}.json"
+        path = out_dir / filename
         with open(path, "w", encoding="utf-8") as f:
             json.dump(json_safe(result), f, ensure_ascii=False, indent=2, allow_nan=False)
         print(f"已写入 {path}")

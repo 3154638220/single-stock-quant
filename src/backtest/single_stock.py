@@ -192,6 +192,31 @@ def _index_allows_new_position(
     return multiplier > 0.0
 
 
+def _align_index_macd_hist(index_ohlcv: pd.DataFrame | None, stock_dates: pd.Series) -> np.ndarray | None:
+    """Align benchmark MACD histogram values to stock bar dates."""
+    if index_ohlcv is None or index_ohlcv.empty or "close" not in index_ohlcv.columns:
+        return None
+    idx_df = index_ohlcv.copy()
+    if "trade_date" in idx_df.columns:
+        idx_df["trade_date"] = pd.to_datetime(idx_df["trade_date"]).dt.normalize()
+    else:
+        idx_df["trade_date"] = pd.to_datetime(idx_df.index).normalize()
+    idx_df = idx_df.sort_values("trade_date").drop_duplicates("trade_date", keep="last").reset_index(drop=True)
+    idx_close = pd.to_numeric(idx_df["close"], errors="coerce")
+    ema_fast = idx_close.ewm(span=12, adjust=False).mean()
+    ema_slow = idx_close.ewm(span=26, adjust=False).mean()
+    diff = ema_fast - ema_slow
+    signal = diff.ewm(span=9, adjust=False).mean()
+    hist = diff - signal
+    date_to_hist = dict(zip(pd.to_datetime(idx_df["trade_date"]).dt.normalize(), hist))
+    aligned = np.full(len(stock_dates), np.nan, dtype=np.float64)
+    for j, d in enumerate(pd.to_datetime(stock_dates).dt.normalize()):
+        value = date_to_hist.get(d)
+        if value is not None and np.isfinite(value):
+            aligned[j] = float(value)
+    return aligned
+
+
 def _close_to_returns(df: pd.DataFrame, name: str) -> pd.Series:
     if df is None or df.empty or "close" not in df.columns:
         return pd.Series(dtype=np.float64, name=name)
@@ -319,6 +344,7 @@ def run_single_stock_backtest(
     meta_label_mode: str = "off",
     require_above_ma120: bool = False,
     require_positive_rs60: bool = False,
+    require_index_trend_bullish: bool = False,
     require_weekly_bullish: bool = False,
     weekly_ma_fast: int = 5,
     weekly_ma_slow: int = 13,
@@ -448,6 +474,13 @@ def run_single_stock_backtest(
     else:
         _attr_rs_60 = _attr_stock_ret60
 
+    _index_trend_bullish_enabled = bool(require_index_trend_bullish)
+    _index_macd_hist = (
+        _align_index_macd_hist(index_ohlcv, df["trade_date"])
+        if _index_trend_bullish_enabled
+        else None
+    )
+
     # S3.4 — index MA20 for position scaling (half-position when index below MA20)
     _s3_idx_ma20_enabled = bool(enable_index_ma20_filter)
     _s3_idx_ma20_aligned = None
@@ -503,6 +536,14 @@ def run_single_stock_backtest(
             if bool(require_positive_rs60):
                 _rs60 = float(_attr_rs_60.iloc[i]) if i < len(_attr_rs_60) else float("nan")
                 if not (np.isfinite(_rs60) and _rs60 > 0):
+                    continue
+            if _index_trend_bullish_enabled:
+                _idx_hist = (
+                    float(_index_macd_hist[i])
+                    if _index_macd_hist is not None and i < len(_index_macd_hist)
+                    else float("nan")
+                )
+                if not (np.isfinite(_idx_hist) and _idx_hist > 0):
                     continue
             if bool(require_weekly_bullish):
                 _weekly_state = str(_attr_weekly_trend.iloc[i]) if i < len(_attr_weekly_trend) else "neutral"

@@ -5,6 +5,7 @@ import pandas as pd
 from src.backtest.wfo import (
     _BT_PARAM_KEYS,
     DEFAULT_PARAM_GRID,
+    _composite_score,
     _oos_trend_with_warmup,
     _params_with,
     _select_stable_params,
@@ -22,6 +23,7 @@ class TestParamSplit:
         assert "stop_loss_pct" in _BT_PARAM_KEYS
         assert "atr_stop_multiplier" in _BT_PARAM_KEYS
         assert "trailing_stop_pct" in _BT_PARAM_KEYS
+        assert "require_index_trend_bullish" in _BT_PARAM_KEYS
         # min_run_len belongs to DKTrendParams, NOT to bt_kwargs
         assert "min_run_len" not in _BT_PARAM_KEYS
         # macd params belong to DKTrendParams
@@ -113,6 +115,24 @@ class TestDefaultParamGrid:
 
         assert result["largest_trade_return"] == 0.10
         assert result["largest_trade_contribution"] == 0.5
+
+    def test_quality_first_reliability_mode_does_not_discount_low_trade_count(self):
+        class Result:
+            n_trades = 2
+            max_drawdown = 0.10
+            sharpe_ratio = 1.0
+            calmar_ratio = 1.5
+            total_return = 0.20
+
+        standard = _composite_score(Result(), train_days=504, min_trades_per_year=1.0)
+        quality_first = _composite_score(
+            Result(),
+            train_days=504,
+            min_trades_per_year=1.0,
+            reliability_mode="quality_first",
+        )
+
+        assert quality_first > standard
 
 
 class TestStableParamSelection:

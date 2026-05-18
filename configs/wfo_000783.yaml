@@ -2,6 +2,9 @@
 # Allows low-frequency but high-quality entries to survive IS scoring, then
 # tests profit-lock reentry and dynamic HQ exit targets in OOS.
 
+paths:
+  output_dir: data/output/experiments/plan_05_19
+
 backtest:
   stop_loss_pct: 0.08
   time_stop_days: 45
@@ -24,6 +27,7 @@ wfo:
   min_trades_per_year: 1.0
   max_trades_per_year: 25.0
   max_drawdown_limit: 0.30
+  reliability_mode: quality_first
   n_jobs: 4
   param_grid:
     macd_fast: [10, 12, 14]
@@ -39,11 +43,24 @@ wfo:
     stop_reentry_cooldown: [2, 3]
     require_price_breakout: [true, false]
     breakout_lookback: [15, 20]
+    require_above_ma120: [true, false]
+    require_positive_rs60: [true, false]
+    require_index_trend_bullish: [true, false]
+    require_adx_min: [0, 18, 22, 26]
+    adx_period: [14]
+    atr_trailing_mult: [0, 2.0, 2.5]
+    atr_trailing_min_gain: [0.03, 0.05]
   fast_grid:
-    macd_fast: [10, 12, 14]
-    macd_slow: [22, 26]
-    macd_signal: [8, 9]
+    macd_fast: [12]
+    macd_slow: [26]
+    macd_signal: [9]
     min_run_len: [1, 2]
-    profit_lock_trigger: [0.10, 0.15]
-    profit_lock_trailing: [0.05, 0.06]
-
+    profit_lock_trigger: [0.10]
+    profit_lock_trailing: [0.05]
+    require_above_ma120: [true, false]
+    require_positive_rs60: [true, false]
+    require_index_trend_bullish: [true, false]
+    require_adx_min: [0, 22]
+    adx_period: [14]
+    atr_trailing_mult: [0, 2.0]
+    atr_trailing_min_gain: [0.05]
