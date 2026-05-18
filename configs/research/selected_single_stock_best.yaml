@@ -1,0 +1,232 @@
+generated_from: scripts/export_selected_single_stock_best.py
+base_config: configs/prod-v1.yaml
+watchlist: configs/watchlist_wfo_passing.txt
+selection_method: latest_platform_fold from WFO platform_by_fold
+shared_backtest:
+  cost_bps: 15.0
+  initial_capital: 100000
+  execution: tplus1_open
+  stop_loss_pct: 0.08
+  trailing_stop_pct: 0.0
+  atr_stop_multiplier: 0.0
+  atr_stop_period: 14
+  risk_per_trade_pct: 0.0
+  position_size_cap: 1.0
+  stop_reentry_enabled: false
+  stop_reentry_cooldown: 3
+  stop_reentry_min_run: 2
+  time_stop_days: 30
+  time_stop_min_return: 0.03
+  profit_lock_trigger: 0.08
+  profit_lock_trailing: 0.04
+  market_exit_mode: 'off'
+  volatility_target_ann: 0.0
+  volatility_lookback: 20
+  volatility_high_vol_multiple: 1.5
+  volatility_high_vol_scale: 0.5
+  drawdown_throttle_enabled: false
+  transaction_cost:
+    commission_buy_bps: 2.5
+    commission_sell_bps: 2.5
+    slippage_bps_per_side: 2.0
+    stamp_duty_sell_bps: 5.0
+shared_signal_filter:
+  volume_confirm: true
+  volume_lookback: 20
+  volume_ratio_min: 1.0
+  min_quality_score: 0.0
+  quality_score_mode: hard
+  quality_score_floor: 0.3
+  meta_label_mode: 'off'
+  meta_label_threshold: 0.5
+  require_above_ma120: false
+  require_positive_rs60: false
+  require_weekly_bullish: false
+  weekly_ma_fast: 5
+  weekly_ma_slow: 13
+symbols:
+  '002475':
+    stock_name: 立讯精密
+    wfo_source: data/output/experiments/E_SINGLE_stable/002475_wfo_20260515.json
+    selected_fold: 2
+    fold_selected_params:
+    - fold: 0
+      params:
+        macd_fast: 14
+        macd_signal: 8
+    - fold: 1
+      params:
+        macd_fast: 14
+        macd_signal: 8
+    - fold: 2
+      params:
+        macd_fast: 14
+        macd_signal: 8
+    trend_signal:
+      mode: macd_cross
+      consensus_n_agree: 2
+      macd_fast: 14
+      macd_slow: 26
+      macd_signal: 8
+      ma_fast: 5
+      ma_slow: 20
+      ma_smooth: 3
+      boll_window: 20
+      min_run_len: 1
+    backtest_result:
+      period: 2020-01-02 ~ 2026-05-08
+      total_return: 0.4507152482983623
+      annualized_return: 0.0629842893756436
+      sharpe_ratio: 0.5420785320486464
+      max_drawdown: 0.2360858303063792
+      calmar_ratio: 0.26678555546474797
+      n_trades: 46
+      win_rate: 0.391304347826087
+  '300059':
+    stock_name: 东方财富
+    wfo_source: data/output/experiments/E_SINGLE_stable/300059_wfo_20260515.json
+    selected_fold: 2
+    fold_selected_params:
+    - fold: 0
+      params:
+        macd_fast: 10
+        macd_signal: 8
+    - fold: 1
+      params:
+        macd_fast: 12
+        macd_signal: 8
+    - fold: 2
+      params:
+        macd_fast: 14
+        macd_signal: 8
+    trend_signal:
+      mode: macd_cross
+      consensus_n_agree: 2
+      macd_fast: 14
+      macd_slow: 26
+      macd_signal: 8
+      ma_fast: 5
+      ma_slow: 20
+      ma_smooth: 3
+      boll_window: 20
+      min_run_len: 1
+    backtest_result:
+      period: 2020-01-02 ~ 2026-05-08
+      total_return: 0.15550973125833534
+      annualized_return: 0.024013080521407604
+      sharpe_ratio: 0.24096916495046203
+      max_drawdown: 0.16628545452323362
+      calmar_ratio: 0.14440878542417832
+      n_trades: 47
+      win_rate: 0.46808510638297873
+  '300750':
+    stock_name: 宁德时代
+    wfo_source: data/output/experiments/E_SINGLE_stable/300750_wfo_20260515.json
+    selected_fold: 2
+    fold_selected_params:
+    - fold: 0
+      params:
+        macd_fast: 10
+        macd_signal: 8
+    - fold: 1
+      params:
+        macd_fast: 10
+        macd_signal: 8
+    - fold: 2
+      params:
+        macd_fast: 10
+        macd_signal: 8
+    trend_signal:
+      mode: macd_cross
+      consensus_n_agree: 2
+      macd_fast: 10
+      macd_slow: 26
+      macd_signal: 8
+      ma_fast: 5
+      ma_slow: 20
+      ma_smooth: 3
+      boll_window: 20
+      min_run_len: 1
+    backtest_result:
+      period: 2020-01-02 ~ 2026-05-15
+      total_return: 1.3930164605901503
+      annualized_return: 0.15347794242096335
+      sharpe_ratio: 0.9327873561522857
+      max_drawdown: 0.1637617090001927
+      calmar_ratio: 0.9372028623662125
+      n_trades: 54
+      win_rate: 0.5370370370370371
+  '600030':
+    stock_name: 中信证券
+    wfo_source: data/output/experiments/E_SINGLE_stable/600030_wfo_20260515.json
+    selected_fold: 2
+    fold_selected_params:
+    - fold: 0
+      params:
+        macd_fast: 10
+        macd_signal: 10
+    - fold: 1
+      params:
+        macd_fast: 14
+        macd_signal: 8
+    - fold: 2
+      params:
+        macd_fast: 12
+        macd_signal: 10
+    trend_signal:
+      mode: macd_cross
+      consensus_n_agree: 2
+      macd_fast: 12
+      macd_slow: 26
+      macd_signal: 10
+      ma_fast: 5
+      ma_slow: 20
+      ma_smooth: 3
+      boll_window: 20
+      min_run_len: 1
+    backtest_result:
+      period: 2020-01-02 ~ 2026-05-08
+      total_return: 0.43856199223108217
+      annualized_return: 0.061765913172916465
+      sharpe_ratio: 0.618466028362611
+      max_drawdown: 0.19346362611583356
+      calmar_ratio: 0.31926370043294344
+      n_trades: 44
+      win_rate: 0.5681818181818182
+  '601318':
+    stock_name: 中国平安
+    wfo_source: data/output/experiments/E_SINGLE_stable/601318_wfo_20260515.json
+    selected_fold: 2
+    fold_selected_params:
+    - fold: 0
+      params:
+        macd_fast: 10
+        macd_signal: 10
+    - fold: 1
+      params:
+        macd_fast: 10
+        macd_signal: 8
+    - fold: 2
+      params:
+        macd_fast: 10
+        macd_signal: 8
+    trend_signal:
+      mode: macd_cross
+      consensus_n_agree: 2
+      macd_fast: 10
+      macd_slow: 26
+      macd_signal: 8
+      ma_fast: 5
+      ma_slow: 20
+      ma_smooth: 3
+      boll_window: 20
+      min_run_len: 1
+    backtest_result:
+      period: 2020-01-02 ~ 2026-05-08
+      total_return: -0.03385291468963769
+      annualized_return: -0.005637908193203867
+      sharpe_ratio: -0.03773066717057553
+      max_drawdown: 0.1689922518560647
+      calmar_ratio: -0.03336193305481145
+      n_trades: 55
+      win_rate: 0.4909090909090909

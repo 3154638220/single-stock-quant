@@ -1,33 +1,22 @@
 <claude-mem-context>
 # Memory Context
 
-# [single-stock-quant] recent context, 2026-05-17 10:25pm GMT+8
+# [single-stock-quant] recent context, 2026-05-18 4:36pm GMT+8
 
 Legend: 🎯session 🔴bugfix 🟣feature 🔄refactor ✅change 🔵discovery ⚖️decision 🚨security_alert 🔐security_note
 Format: ID TIME TYPE TITLE
 Fetch details: get_observations([IDs]) | Search: mem-search skill
 
-Stats: 50 obs (15,268t read) | 2,130,074t work | 99% savings
+Stats: 50 obs (16,313t read) | 1,646,275t work | 99% savings
 
-### May 16, 2026
-S55 用户请求全面分析 single-stock-quant 量化交易项目存在的问题和需要改进的地方 (May 16, 9:53 PM)
 ### May 17, 2026
-648 9:38p 🔵 DK 趋势指标复刻状态：核心问题是从视觉逆向转向收益优先的工程重构
-649 " 🔵 长江证券 (000783) WFO 深度分析揭示策略收益集中度过高和低价股摩擦成本问题
-650 " 🔵 000783 DK Bar 收益率网格校准输出 252 个参数组合，存在大量负收益候选
-651 " 🔵 data/output 目录积累了跨 15+ 股票的 WFO 结果和多种格式输出，缺乏清理和组织
-652 " 🔵 项目配置管理体系复杂：20+ YAML 文件覆盖策略变体、WFO 阶段和生产环境
 654 9:41p 🔵 2026-05-16 最新 WFO 结果确认：仅 2/6 只标的 Sharpe 为正，泛化能力严重不足
 655 " 🔵 生产环境配置 prod-v1 仅使用 4 只 WFO 通过的标的，Meta-label 因 600030 上劣化被禁用
 656 " 🔵 calibrate_eastmoney_dkbar.py 的 objective_score 公式权重硬编码且缺乏校准依据
 657 " 🔵 persistent_price_change 颜色状态机在纯 Python 循环中逐行计算，性能瓶颈明显
-658 " 🔵 README 文档严重过时——仅描述 macd_cross/ma_cross/boll_trend 三种模式，未提及 eastmoney_dkbar
-659 " 🔵 回测引擎积累了 7 层退出机制和 5 层仓位缩放，复杂度已接近生产系统但缺乏集成测试覆盖
-660 " 🔵 test_dktrend.py 和 test_eastmoney_anchor_scoring.py 验证了 bar_color/trend_state 拆分和锚点加载的基础逻辑
 661 9:43p 🔵 代码质量扫描：ruff 发现 43 个问题（30 个可自动修复），mypy 发现 13 个类型错误
 662 " 🔵 WFO JSON 输出存在 NaN 序列化问题——heatmap 数据包含大量 NaN 值
 663 " 🔵 000783 DK WFO 的参数选择揭示了 platform 机制的实际效果：两个 Fold 均未选峰值
-S56 系统化更新项目目标表述和文档措辞：将项目从"东财指标复刻"重新定位为"单股量化交易系统" (May 17, 9:45 PM)
 664 9:48p 🔵 新任务启动：系统化更新项目目标表述和文档措辞
 665 " 🔵 全项目"复刻/东财"关键词搜索揭示目标表述散布在 30+ 个文件中
 666 " 🔵 docs/indicator_formula.md 和 configs/README.md 同样过时——仅覆盖 3 种基本模式，未提及 EASTMONEY_DKBAR
@@ -52,6 +41,7 @@ S63 用户询问"当前模型公式是什么"——Codex深入解读了项目核
 678 10:05p 🔵 single_stock.py回测引擎支持10种退出机制和5层仓位管理
 679 " 🔵 WFO复合目标函数以Calmar为主权重（40%），硬约束限制年交易4-24次且回撤≤40%
 680 " 🔵 compute_signal_quality评分函数为BUY信号提供8维度0-100质量分
+S64 Complete plan-05-15(2).md — execute all five R01-R05 tasks for 000783 single-stock return improvement, including P0 refactoring of the scoring pipeline from anchor-matching to pure return-quality optimization (May 17, 10:07 PM)
 681 10:13p 🔵 Strategic pivot: single-stock quant project shifts from anchor-matching to pure return optimization
 682 " 🔵 000783 return grid shows sma205/wma5/c3 as current WFO baseline with low drawdown, sma60 variants as higher-return alternatives
 683 " 🔵 Codebase structure: single-stock-quant project has mature WFO framework, trade forensics, and experiment infrastructure
@@ -70,57 +60,56 @@ S63 用户询问"当前模型公式是什么"——Codex深入解读了项目核
 696 " 🟣 Plan-05-15(2) fully completed: P0 refactoring + R01-R05 execution delivered in single session
 697 10:23p ✅ Code quality: ruff linting errors resolved, unused variable removed from nested WFO path
 698 " ✅ Final quality gate: all 201 tests pass, all ruff linting passes, clean git diff shows targeted changes only
-S64 Complete plan-05-15(2).md — execute all five R01-R05 tasks for 000783 single-stock return improvement, including P0 refactoring of the scoring pipeline from anchor-matching to pure return-quality optimization (May 17, 10:24 PM)
-**Investigated**: The plan document docs/plan-05-15(2).md was read in full, establishing the strategic pivot from eastmoney DKBar anchor replication to pure return optimization for stock 000783. The existing grid search output (000783_dkbar_return_grid_full.csv, 252 rows) was examined, revealing that all 7 anchor diagnostic columns are near-identical across candidates (matched_anchors=7, bar_color_accuracy=0.714 constant), confirming they provide zero discrimination for parameter selection. The full codebase was surveyed: WFO framework (wfo.py with _select_platform, _select_stable_params, bootstrap_sharpe_ci, nested WFO), backtest engine (single_stock.py with exit mechanisms including intrapos_dd_limit, dk_fade_exit_n, profit_lock, time_stop), grid search script (calibrate_eastmoney_dkbar.py with blended scoring), and 22 config YAMLs. WFO JSON outputs from 20260516 were found to contain widespread NaN values in heatmap grids and turnover_mean fields, confirming the plan's P0 requirement to fix NaN/inf serialization.
+S65 Complete plan-05-15(2).md — execute all five R01-R05 tasks: refactor scoring from anchor-matching to pure return-quality, re-rank grid candidates, run fixed-parameter WFO on top-10, test exit/entry experiment overlays, and produce best strategy config (May 17, 10:24 PM)
+699 10:25p 🔵 Best experiment trade-level details confirmed: 7 trades across 3 OOS folds, all exits via intrapos_dd_stop or signal
+### May 18, 2026
+700 4:26p 🔵 量化交易策略优化任务启动：多股票最佳单股策略配置分析
+701 4:27p 🔵 项目结构探索：single-stock-quant 量化交易系统的关键配置与数据文件
+702 4:28p 🔵 全面代码审查完成：single-stock-quant 项目架构与多股票策略配置任务的理解
+703 4:29p 🔵 WFO 结果跨目录对比：5只股票在不同配置下的参数表现
+704 4:30p 🟣 新增多股票最佳策略配置导出脚本 export_selected_single_stock_best.py
+705 " 🟣 5只股票最佳单股策略配置产出完成：每只独立 MACD 参数 + 完整交易明细
+706 4:31p 🟣 任务完成：多股票最佳单股策略配置导出脚本最终版完善
+S66 多股票最佳单股策略配置导出：产出 5 只 WFO passing 股票的独立最佳参数配置及 246 笔逐笔交易明细 (May 18, 4:32 PM)
+**Investigated**: 探索了 single-stock-quant 项目的完整架构，包括：
+    1. 核心回测引擎 src/backtest/single_stock.py 的 run_single_stock_backtest() 函数（支持 T+1 开盘执行、10种退出机制、信号过滤、trade_log 含 14 个归因字段）
+    2. 统一参数构建函数 src/backtest/config.py 的 build_bt_kwargs()
+    3. 趋势指标系统 src/indicators/dktrend.py（9 种模式：MACD_CROSS、MA_CROSS、BOLL_TREND、DONCHIAN_BREAKOUT 等）
+    4. 多个配置文件：prod-v1.yaml（5 股 WFO 验证）、s_final.yaml（SE1-SE6 实验结论）、wfo_stable.yaml（固定 exit 仅优化 MACD）
+    5. E_SINGLE_stable 和 E_SINGLE_final 实验的 WFO 结果对比（发现 E_SINGLE_final 参数更多反而在 300750 上表现更差）
+    6. 现有 000783 单股分析流程（run_000783_return_plan.py）作为参考模式
+    7. 项目 plan-05-15(2).md 定义的 P3 阶段目标：每只股票独立选参
 
-**Learned**: The existing objective_score function in calibrate_eastmoney_dkbar.py blends return_quality with 0.35*anchor_fit, inflating scores for visually "anchor-like" parameter sets that don't necessarily trade well. The exit layer is confirmed as the primary bottleneck — the strategy captures directional moves but loses profit on exits, validated by the experiment results where intrapos_dd_limit=0.05 outperformed all baseline candidates. The sma205/wma5/c3 family produces only 5 trades over the full period with 11.7% drawdown but 30% total return, while sma60 variants produce 15+ trades with up to 54.9% return but 27%+ drawdown. Meta-label models (meta_label.py, meta_label_gbm.py) exist but are orphaned — p_win predictions never affect trade decisions. Pandas Series preserves numpy dtypes (np.int64) when accessed by key, causing PyYAML safe_dump to fail — requiring explicit _native() conversion. The WFO framework already supports nested WFO, stability-weighted param selection, Bootstrap CI, and platform selection (avoiding isolated parameter peaks), but currently only generates 2 OOS folds for 000783.
+**Learned**: 1. E_SINGLE_stable（仅优化 MACD fast/signal）的 combined Sharpe 更稳定，E_SINGLE_final（5 参数网格）扩大参数反而引入过拟合：300750 从 stable 的 0.537 跌到 final 的 0.413
+    2. 300059 在所有 WFO 配置下 3 个 fold 参数都不一致（10→12→14），提示该股趋势特征不稳定
+    3. 所有股票几乎全以 profit_lock 退出（占比 >90%），说明盈利保护卖出机制起主导作用
+    4. 交易明细 trade_log 包含 mae/mfe 字段，可分析每笔交易的最大浮亏和最大浮盈
+    5. 601318（中国平安）全样本收益为 -3.39%，尽管 WFO OOS 收益 24.06% 为正，应标记为"观察"标的
+    6. 项目使用真实 A 股成本模型：commission 2.5bps ×2 + slippage 2bps ×2 + stamp_duty 5bps = 合计约 12bps 每笔往返
 
-**Completed**: **P0 Refactoring (scoring pipeline unification):**
-    - Extracted `return_quality_score()` from `objective_score()` in calibrate_eastmoney_dkbar.py — pure trading score with: sharpe + 1.50*ann + 0.50*excess + 0.25*ret + 0.20*calmar + trade_bonus - 1.25*max_dd - low_trade_penalty - concentration_penalty
-    - Added `trade_contribution_metrics()` to both calibrate_eastmoney_dkbar.py (tuple return) and wfo.py (dict return) — computes largest single winning trade and its share of total return
-    - Concentration penalty: max(0, contribution - 0.60) * 0.75 penalizes single-trade-dependent strategies
-    - Trade bonus: min(max(trades, 0), 20) / 20.0 * 0.15 rewards independent trades (capped at 20)
-    - Anchor diagnostics removed from primary score; only enter via "blended" or "anchor_fit" sort modes
-    - Main loop now emits both `return_quality` and `objective_score` columns
+**Completed**: 1. 创建并完善了 scripts/export_selected_single_stock_best.py（~180行），功能包括：
+       - 从 WFO JSON 的 platform_by_fold 中提取每只股票最新 fold 的最佳 MACD 参数
+       - 对每只股票执行全样本回测并输出完整 trade_log
+       - 生成多种格式输出：YAML 配置、汇总 CSV、合并交易明细 CSV、单股交易 CSV
+    2. 修复了 _native() 函数中 pandas NaN 序列化的语法错误
+    3. 新增 --config-output 参数以同时写入 configs/research/ 目录
+    4. 产出文件清单：
+       - configs/research/selected_single_stock_best.yaml（完整配置）
+       - data/output/selected_single_stock_best/best_configs.yaml
+       - data/output/selected_single_stock_best/best_configs_summary.csv（5 行汇总）
+       - data/output/selected_single_stock_best/trade_details.csv（246 行合并交易）
+       - data/output/selected_single_stock_best/{symbol}_trades.csv（5 个单股交易文件）
+    5. ruff lint 通过，零警告零错误
+    6. 5 只股票结果汇总：
+       - 002475 立讯精密 MACD(14,26,8) 全样本回报 45.07% 年化 6.30%
+       - 300059 东方财富 MACD(14,26,8) 全样本回报 15.55% 年化 2.40%
+       - 300750 宁德时代 MACD(10,26,8) 全样本回报 139.30% 年化 15.35%
+       - 600030 中信证券 MACD(12,26,10) 全样本回报 43.86% 年化 6.18%
+       - 601318 中国平安 MACD(10,26,8) 全样本回报 -3.39% 年化 -0.56%
 
-    **P0 NaN/Inf fix:**
-    - Added `json_safe()` to wfo.py — recursively converts NaN/Inf→None, np.generic→native, pd.Timestamp→isoformat
-    - Wired into run_wfo.py: `json.dump(json_safe(result), ..., allow_nan=False)` for strict JSON compliance
-    - Verified: `{"x": null, "y": [null, null, 1.0]}` output for NaN/Inf inputs
-
-    **P0 Trade contribution in WFO:**
-    - Regular WFO oos_panels now include per-fold: total_return, annualized_return, max_drawdown, calmar_ratio, n_trades, largest_trade_return, largest_trade_contribution
-    - Nested WFO outer_fold_results now include oos_largest_trade_return and oos_largest_trade_contribution
-
-    **R01-R05 Execution (new orchestration script):**
-    - Created `scripts/run_000783_return_plan.py` (~340 lines) — single CLI script implementing all five tasks
-    - R01: Re-enriched 252 grid candidates with new return_quality scoring → `data/output/000783_return_candidates.csv` (85KB)
-    - R02: Fixed-parameter WFO on top-10 candidates (756 train / 252 OOS days, 3 folds) → `data/output/000783_top10_wfo_contribution.csv` (2.7KB), `data/output/000783_top10_wfo_trades.csv` (14KB)
-    - R03/R04: 26 experiment variants (intrapos_dd [0.04-0.08], dk_fade [3-5], profit_lock [3 combos], state_confirm_days [1,2]) crossed with best sma60 and sma205 candidates → `data/output/000783_exit_entry_experiments.csv` (7.9KB)
-    - R05: Multi-tier eligibility gate selects best → `configs/research/000783_best_return.yaml` (2.1KB)
-    - Fixed numpy→YAML serialization crash by adding `_native()` converter function
-    - Fixed dead `panel` variable in nested WFO path (ruff F841)
-    - Fixed import ordering (ruff I001 via --fix)
-
-    **Best result:**
-    - Experiment: `R03_R04_03_intrapos_dd_0.05` (sma60/wma5/price_change/c2/h0 with intrapos_dd_limit=0.05)
-    - OOS total return: 47.61% (↑ from 29.6% baseline)
-    - OOS annualized: 13.86% (short of 16% target)
-    - OOS max drawdown: 10.46% (within ≤15% target)
-    - OOS Calmar: 1.33 (↑ from 1.28 baseline)
-    - 7 trades, largest contribution: 48.39% (within ≤60% target)
-
-    **Quality gates:**
-    - 201/201 tests pass (zero failures)
-    - ruff: "All checks passed!" across all 5 modified Python files
-    - Git diff: 157 insertions, 30 deletions across 6 modified files + 2 new files
-
-    **Plan document updated:**
-    - Section 7 task table marked all R01-R05 as "已完成" with output paths
-    - New section 7.1 records execution results and next-round guidance
-
-**Next Steps**: The plan's section 7.1 conclusion recommends next round focus on sma60/wma5/c2 exit layer refinement and trade count improvement to reach the 16% annualized return target. The orchtration script (run_000783_return_plan.py) is fully reproducible — can be re-run with different parameters. No further work was requested or indicated in this session.
+**Next Steps**: 当前任务已完成交付。用户请求的多股票最佳单股策略配置和逐笔交易明细已全部产出。
+    工作区存在原有的未处理变更：AGENTS.md 修改和 docs/000783.md 删除，这些不属于本次任务范围。
 
 
-Access 2130k tokens of past work via get_observations([IDs]) or mem-search skill.
+Access 1646k tokens of past work via get_observations([IDs]) or mem-search skill.
 </claude-mem-context>
