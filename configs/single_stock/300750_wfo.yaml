@@ -1,0 +1,51 @@
+# Phase S4: 300750 WFO with focused exit-parameter grid
+# Based on S2 findings: MACD is the dominant signal, problem is exit optimization
+paths:
+  duckdb_path: data/market.duckdb
+  output_dir: data/output
+  logs_dir: data/logs
+  stock_name_cache: data/stock_names.csv
+
+trend_signal:
+  mode: macd_cross
+  macd_fast: 10
+  macd_slow: 26
+  macd_signal: 8
+  min_run_len: 1
+
+signal_filter:
+  volume_confirm: true
+  volume_lookback: 20
+  volume_ratio_min: 1.0
+  require_adx_min: 0.0
+  adx_period: 14
+
+backtest:
+  cost_bps: 15.0
+  initial_capital: 100000
+  execution: tplus1_open
+  stop_loss_pct: 0.08
+  transaction_cost:
+    commission_buy_bps: 2.5
+    commission_sell_bps: 2.5
+    slippage_bps_per_side: 2.0
+    stamp_duty_sell_bps: 5.0
+
+risk:
+  enable_index_filter: false
+
+wfo:
+  min_trades_per_year: 1.5
+  max_trades_per_year: 40.0
+  max_drawdown_limit: 0.50
+  param_grid:
+    # Signal params (focused based on S2 findings)
+    macd_fast: [10, 12]
+    macd_signal: [8, 10]
+    # Exit params (focused around S2 best: mult=3.0, min_gain=0.06, dd=0.04, sl=0.07)
+    atr_trailing_mult: [2.5, 3.0]
+    atr_trailing_min_gain: [0.06, 0.08, 0.10]
+    intrapos_dd_limit: [0.04, 0.05, 0.06]
+    stop_loss_pct: [0.07, 0.08]
+    # Entry quality
+    require_adx_min: [0.0, 20.0]
