@@ -4,6 +4,9 @@
 # 2026-05-19 cleanup: dk_fade_exit_n is fixed off after MFE diagnostics showed
 # it exits during normal trend consolidation and wastes search space.
 
+paths:
+  output_dir: data/output/experiments/plan_05_19
+
 backtest:
   stop_loss_pct: 0.08
   time_stop_days: 30
@@ -30,3 +33,28 @@ wfo:
     profit_lock_trigger: [0.10, 0.12, 0.15]
     profit_lock_trailing: [0.04, 0.05, 0.06]
   # 4×3×4×2×3×3 = 864 combinations; use for final verification.
+  fast_grid:
+    macd_fast: [12]
+    macd_slow: [26]
+    macd_signal: [9]
+    min_run_len: [1, 2]
+    profit_lock_trigger: [0.10, 0.12, 0.15]
+    profit_lock_trailing: [0.04, 0.05, 0.06]
+    atr_trailing_mult: [0, 1.5, 2.0, 2.5]
+    atr_trailing_min_gain: [0.03, 0.05]
+    intrapos_dd_limit: [0, 0.12, 0.15]
+    require_positive_rs60: [true, false]
+  weekly_test:
+    macd_fast: [12]
+    macd_slow: [26]
+    macd_signal: [9]
+    min_run_len: [1, 2]
+    profit_lock_trigger: [0.12, 0.15]
+    profit_lock_trailing: [0.05]
+    atr_trailing_mult: [1.5, 2.0, 2.5]
+    atr_trailing_min_gain: [0.05]
+    intrapos_dd_limit: [0.12, 0.15, 0.18]
+    require_positive_rs60: [true, false]
+    require_weekly_bullish: [true, false]
+    weekly_ma_fast: [5]
+    weekly_ma_slow: [13]

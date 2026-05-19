@@ -40,22 +40,21 @@ def _read_watchlist(path: Path) -> list[str]:
 
 def _trend_quality_score(df: pd.DataFrame, params: DKTrendParams) -> float:
     """Fraction of DK red days where close > previous close (price rising)."""
+    df = df.reset_index(drop=True)
     trend = compute_dktrend(df, params)
     red_mask = trend["dk_color"] == "red"
     if red_mask.sum() < 10:
         return 0.0
-    # Align: trend has trade_date index, df has integer index
     close = pd.to_numeric(df["close"], errors="coerce")
     rising = (close.diff() > 0).values
     red_indices = trend.index[red_mask]
-    df_dates = pd.to_datetime(df["trade_date"]).dt.normalize()
-    # Map trend dates back to df positions
+    df_dates = pd.to_datetime(df["trade_date"]).dt.normalize().reset_index(drop=True)
     aligned = []
     for d in red_indices:
-        pos = df_dates[df_dates == d].index
-        if len(pos) > 0:
-            i = pos[0]
-            if i > 0 and i < len(rising):
+        pos_list = df_dates[df_dates == d].index.tolist()
+        if pos_list:
+            i = pos_list[0]
+            if 0 < i < len(rising):
                 aligned.append(rising[i])
     if not aligned:
         return 0.0

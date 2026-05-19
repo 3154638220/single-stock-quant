@@ -1,0 +1,52 @@
+# WFO: Donchian breakout trend mode (Section 7, X3).
+# Compares Donchian channel breakout against MACD baseline.
+# Donchian has "innate trend confirmation": price must break past N-day high
+# to enter, which naturally filters false breakouts.
+
+paths:
+  output_dir: data/output/experiments/plan_05_19
+
+trend_signal:
+  mode: donchian_breakout
+
+backtest:
+  stop_loss_pct: 0.08
+  time_stop_days: 30
+  time_stop_min_return: 0.03
+  profit_lock_trigger: 0.08
+  profit_lock_trailing: 0.04
+  market_exit_mode: "off"
+
+signal_filter:
+  volume_confirm: true
+
+wfo:
+  train_days: 504
+  oos_days: 126
+  step_days: 126
+  min_trades_per_year: 2.0
+  max_trades_per_year: 30.0
+  max_drawdown_limit: 0.35
+  n_jobs: 4
+  # Full param_grid: 4×3×2×3×2×3×3×3×2 = 7776 combos
+  param_grid:
+    donchian_entry_window: [15, 20, 25, 30]
+    donchian_exit_window: [8, 10, 12]
+    min_run_len: [1, 2]
+    atr_trailing_mult: [1.5, 2.0, 2.5]
+    atr_trailing_min_gain: [0.03, 0.05]
+    intrapos_dd_limit: [0.12, 0.15, 0.18]
+    profit_lock_trigger: [0.10, 0.12, 0.15]
+    profit_lock_trailing: [0.04, 0.05, 0.06]
+    require_positive_rs60: [true, false]
+  # Fast grid: 3×2×2×3×1×2×1×1×2 = 144 combos
+  fast_grid:
+    donchian_entry_window: [15, 20, 25]
+    donchian_exit_window: [8, 10]
+    min_run_len: [1, 2]
+    atr_trailing_mult: [1.5, 2.0, 2.5]
+    atr_trailing_min_gain: [0.05]
+    intrapos_dd_limit: [0.12, 0.15]
+    profit_lock_trigger: [0.12]
+    profit_lock_trailing: [0.05]
+    require_positive_rs60: [true, false]
