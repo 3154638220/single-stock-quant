@@ -1,0 +1,48 @@
+# Per-symbol DKTrendParams (Phase J-1)
+# Each symbol can use a different trend detection mode and parameters.
+# Symbols not listed here fall back to the global trend_params.
+# X3 pool expanded per Appendix A: added 600519, 600887, 600900.
+
+symbol_params:
+  "300750":
+    mode: macd_cross
+    macd_fast: 12
+    macd_slow: 26
+    macd_signal: 9
+    min_run_len: 1
+
+  "600036":
+    mode: donchian_breakout
+    donchian_entry_window: 30
+    donchian_exit_window: 15
+    min_run_len: 1
+
+  "000858":
+    mode: donchian_breakout
+    donchian_entry_window: 25
+    donchian_exit_window: 12
+    min_run_len: 1
+
+  "002594":
+    mode: donchian_breakout
+    donchian_entry_window: 20
+    donchian_exit_window: 10
+    min_run_len: 1
+
+  "600519":
+    mode: donchian_breakout
+    donchian_entry_window: 25
+    donchian_exit_window: 12
+    min_run_len: 1
+
+  "600887":
+    mode: donchian_breakout
+    donchian_entry_window: 30
+    donchian_exit_window: 15
+    min_run_len: 1
+
+  "600900":
+    mode: donchian_breakout
+    donchian_entry_window: 40
+    donchian_exit_window: 20
+    min_run_len: 1

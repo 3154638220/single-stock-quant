@@ -259,6 +259,14 @@ def run_rotation_backtest(
     market_regime_mode: str = "off",
     regime_ma_period: int = 120,
     regime_reduce_top_n: int = 1,
+    regime_fast_ma_period: int = 0,
+    regime_fast_threshold: float = 0.97,
+    regime_drawdown_trigger: float = 0.0,
+    regime_drawdown_lookback: int = 60,
+    portfolio_dd_limit: float = 0.0,
+    volatility_target_ann: float = 0.0,
+    volatility_scale_floor: float = 0.30,
+    symbol_params: dict[str, DKTrendParams] | None = None,
 ) -> RotationResult:
     """Run multi-stock rotation backtest.
 
@@ -309,8 +317,9 @@ def run_rotation_backtest(
     atrs: dict[str, pd.Series] = {}
     for sym in aligned:
         df = aligned[sym]
+        effective_params = (symbol_params or {}).get(sym, params)
         trends[sym] = _compute_trend(
-            df, params,
+            df, effective_params,
             volume_confirm=volume_confirm,
             volume_lookback=volume_lookback,
             volume_ratio_min=volume_ratio_min,
@@ -328,6 +337,7 @@ def run_rotation_backtest(
         atrs[sym] = atr_val / close
 
     # ---- market regime detection (pre-compute for all dates) ----
+    # H-1/H-2: Dual-speed MA + drawdown trigger detection
     market_regime_bearish: pd.Series | None = None
     if market_regime_mode != "off":
         if index_ohlcv is not None:
@@ -353,9 +363,29 @@ def run_rotation_backtest(
             else:
                 idx_close = pd.Series(dtype=float)
 
-        idx_ma = idx_close.rolling(regime_ma_period, min_periods=regime_ma_period // 2).mean()
-        ma_slope = idx_ma.diff(5)
-        regime_bear = (idx_close < idx_ma) & (ma_slope < 0)
+        # H-1: Slow MA (compatible with existing MA120 logic)
+        slow_ma_period = regime_ma_period
+        idx_ma_slow = idx_close.rolling(slow_ma_period, min_periods=slow_ma_period // 2).mean()
+        slope_slow = idx_ma_slow.diff(10)
+        is_bear_slow = (idx_close < idx_ma_slow) & (slope_slow < 0)
+
+        # H-1: Fast MA for quick bear detection
+        if regime_fast_ma_period > 0:
+            idx_ma_fast = idx_close.rolling(regime_fast_ma_period, min_periods=regime_fast_ma_period // 2).mean()
+            slope_fast = idx_ma_fast.diff(5)
+            is_bear_fast = (idx_close < idx_ma_fast * regime_fast_threshold) & (slope_fast < 0)
+        else:
+            is_bear_fast = pd.Series(False, index=idx_close.index)
+
+        regime_bear = is_bear_slow | is_bear_fast
+
+        # H-2: Drawdown trigger (second defense line)
+        if regime_drawdown_trigger > 0:
+            rolling_peak = idx_close.rolling(regime_drawdown_lookback, min_periods=20).max()
+            drawdown_from_peak = idx_close / rolling_peak - 1.0
+            is_bear_drawdown = drawdown_from_peak < -regime_drawdown_trigger
+            regime_bear = regime_bear | is_bear_drawdown
+
         # Align to reference timeline
         if index_ohlcv is not None:
             regime_map = dict(zip(idx_df["trade_date"], regime_bear))
@@ -383,6 +413,8 @@ def run_rotation_backtest(
     daily_returns = pd.Series(0.0, index=ref_df.index, dtype=float)
     trades: list[dict] = []
     rotation_count = 0
+    portfolio_dd_triggered = False
+    equity_peak = initial_capital
 
     def _total_equity(i: int) -> float:
         val = cash
@@ -475,13 +507,27 @@ def run_rotation_backtest(
                 elif market_regime_mode == "reduce":
                     effective_top_n = min(regime_reduce_top_n, top_n)
 
+        # H-3: Portfolio equity curve drawdown limit (third defense line)
+        force_rebalance = False
+        if portfolio_dd_limit > 0:
+            current_equity = _total_equity(i)
+            equity_peak = max(equity_peak, current_equity)
+            equity_drawdown = current_equity / equity_peak - 1.0
+            if equity_drawdown < -portfolio_dd_limit:
+                effective_top_n = 0
+                force_rebalance = True
+                portfolio_dd_triggered = True
+
         # Force rebalance if bear regime requires fewer positions than currently held
         force_rebalance = (
-            market_regime_mode != "off"
-            and market_regime_bearish is not None
-            and i < len(market_regime_bearish)
-            and market_regime_bearish.iloc[i]
-            and len(positions) > effective_top_n
+            force_rebalance
+            or (
+                market_regime_mode != "off"
+                and market_regime_bearish is not None
+                and i < len(market_regime_bearish)
+                and market_regime_bearish.iloc[i]
+                and len(positions) > effective_top_n
+            )
         )
 
         # Rebalance on schedule (or when a position was exited and we have capacity)
@@ -587,6 +633,16 @@ def run_rotation_backtest(
                     allocation = (cash / n_target) * 0.95  # leave buffer for costs
                 if allocation <= 0:
                     continue
+
+                # I-2: Volatility target position scaling
+                if volatility_target_ann > 0 and i >= 20:
+                    recent_rets = daily_returns.iloc[max(0, i - 20):i].dropna()
+                    if len(recent_rets) >= 10:
+                        realized_vol = float(np.std(recent_rets.to_numpy(dtype=np.float64)) * np.sqrt(252))
+                        if np.isfinite(realized_vol) and realized_vol > 0:
+                            vol_scale = min(1.0, volatility_target_ann / realized_vol)
+                            vol_scale = max(vol_scale, volatility_scale_floor)
+                            allocation *= vol_scale
 
                 shares = allocation / entry_px
                 cost = allocation * cost_bps / 10000.0

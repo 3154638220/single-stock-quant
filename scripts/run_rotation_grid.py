@@ -34,10 +34,21 @@ SUB_PERIODS = [
     ("2024H2-2026", "2024-07-01", "2026-04-30", "recent_bull"),
 ]
 
+H_VARIANT_SUB_PERIODS = [
+    ("T2_tradewar", "2018-01-01", "2019-01-31", "trade_war_bear"),
+    ("T4_newenergy", "2021-12-01", "2022-12-31", "new_energy_bear"),
+    ("T5_bull", "2024-07-01", "2026-04-30", "recent_bull"),
+]
+
 ROTATION_GRID = {
     "top_n": [1, 2, 3],
     "rebalance_freq": [5, 10, 15],
     "ranking_mode": ["trend_strength", "rs_momentum", "multi_factor"],
+}
+
+H_VARIANT_GRID = {
+    "regime_fast_ma_period": [40, 50, 60, 80],
+    "regime_drawdown_trigger": [0.10, 0.12, 0.15, 0.18],
 }
 
 
@@ -69,6 +80,15 @@ def _run_one(
     rebalance_freq: int,
     ranking_mode: str,
     trend_params: DKTrendParams,
+    market_regime_mode: str = "off",
+    regime_ma_period: int = 120,
+    regime_fast_ma_period: int = 0,
+    regime_fast_threshold: float = 0.97,
+    regime_drawdown_trigger: float = 0.0,
+    regime_drawdown_lookback: int = 60,
+    portfolio_dd_limit: float = 0.0,
+    volatility_target_ann: float = 0.0,
+    volatility_scale_floor: float = 0.30,
 ) -> dict:
     try:
         result = run_rotation_backtest(
@@ -88,6 +108,15 @@ def _run_one(
             time_stop_min_return=0.03,
             cost_bps=15.0,
             initial_capital=100_000.0,
+            market_regime_mode=market_regime_mode,
+            regime_ma_period=regime_ma_period,
+            regime_fast_ma_period=regime_fast_ma_period,
+            regime_fast_threshold=regime_fast_threshold,
+            regime_drawdown_trigger=regime_drawdown_trigger,
+            regime_drawdown_lookback=regime_drawdown_lookback,
+            portfolio_dd_limit=portfolio_dd_limit,
+            volatility_target_ann=volatility_target_ann,
+            volatility_scale_floor=volatility_scale_floor,
         )
         return {
             "annualized_return": result.annualized_return,
@@ -120,6 +149,10 @@ def main() -> int:
     parser.add_argument("--donchian-exit", type=int, default=10)
     parser.add_argument("--min-run-len", type=int, default=1)
     parser.add_argument("--export-results", action="store_true")
+    parser.add_argument("--h-variant-mode", action="store_true",
+                        help="Test H-series parameters (fast MA x drawdown trigger) on T2/T4/T5 only")
+    parser.add_argument("--index-symbol", default="000300",
+                        help="Index symbol for market regime (default: 000300)")
     args = parser.parse_args()
 
     symbols = _read_watchlist(args.watchlist)
@@ -131,17 +164,26 @@ def main() -> int:
         min_run_len=args.min_run_len,
     )
 
-    combos = [
-        dict(zip(ROTATION_GRID.keys(), vals))
-        for vals in product(*ROTATION_GRID.values())
-    ]
-    print(f"Testing {len(combos)} parameter combinations across {len(SUB_PERIODS)} sub-periods")
+    if args.h_variant_mode:
+        combos = [
+            dict(zip(H_VARIANT_GRID.keys(), vals))
+            for vals in product(*H_VARIANT_GRID.values())
+        ]
+        periods = H_VARIANT_SUB_PERIODS
+        print(f"H-Variant Mode: {len(combos)} combos x {len(periods)} periods = {len(combos) * len(periods)} runs")
+    else:
+        combos = [
+            dict(zip(ROTATION_GRID.keys(), vals))
+            for vals in product(*ROTATION_GRID.values())
+        ]
+        periods = SUB_PERIODS
+        print(f"Testing {len(combos)} parameter combinations across {len(periods)} sub-periods")
     print(f"Symbols: {symbols}")
 
     all_results: list[dict] = []
 
     with DuckDBManager(config_path=args.config, duckdb_path=args.duckdb_path) as db:
-        for period_name, start, end, regime in SUB_PERIODS:
+        for period_name, start, end, regime in periods:
             print(f"\n{'='*60}")
             print(f"Period: {period_name} ({start} ~ {end}) [{regime}]")
             print(f"{'='*60}")
@@ -150,9 +192,35 @@ def main() -> int:
             valid_symbols = list(ohlcv_map.keys())
             print(f"  Loaded {len(valid_symbols)} symbols: {valid_symbols}")
 
+            # Load index data for H-variant mode (market regime exit)
+            index_df = None
+            if args.h_variant_mode:
+                try:
+                    idx_all = db.read_daily_frame(symbols=[args.index_symbol], start=start, end=end)
+                    idx_sub = idx_all[idx_all["symbol"].astype(str).str.zfill(6) == args.index_symbol].copy()
+                    if len(idx_sub) >= 30:
+                        index_df = idx_sub
+                except Exception:
+                    pass
+
             period_results = []
             for combo in combos:
-                top_n = combo["top_n"]
+                if args.h_variant_mode:
+                    top_n = 1
+                    rebalance_freq = 10
+                    ranking_mode = "trend_strength"
+                    extra_kw = {
+                        "market_regime_mode": "exit",
+                        "regime_ma_period": 120,
+                        "regime_fast_ma_period": combo["regime_fast_ma_period"],
+                        "regime_drawdown_trigger": combo["regime_drawdown_trigger"],
+                    }
+                else:
+                    top_n = combo["top_n"]
+                    rebalance_freq = combo["rebalance_freq"]
+                    ranking_mode = combo["ranking_mode"]
+                    extra_kw = {}
+
                 if len(valid_symbols) < top_n:
                     period_results.append({**combo, "error": f"need {top_n} symbols, have {len(valid_symbols)}"})
                     continue
@@ -160,9 +228,10 @@ def main() -> int:
                 metrics = _run_one(
                     ohlcv_map,
                     top_n=top_n,
-                    rebalance_freq=combo["rebalance_freq"],
-                    ranking_mode=combo["ranking_mode"],
+                    rebalance_freq=rebalance_freq,
+                    ranking_mode=ranking_mode,
                     trend_params=trend_params,
+                    **extra_kw,
                 )
                 entry = {**combo, "period": period_name, "regime": regime, **metrics}
                 period_results.append(entry)
@@ -171,7 +240,10 @@ def main() -> int:
                 calmar = metrics["calmar_ratio"]
                 mdd = metrics["max_drawdown"]
                 err = metrics["error"]
-                if err:
+                if args.h_variant_mode:
+                    print(f"  fast_ma={combo['regime_fast_ma_period']} dd_trig={combo['regime_drawdown_trigger']} -> "
+                          f"ann={ann:.4f} calmar={calmar:.2f} mdd={mdd:.4f} trades={metrics['n_trades']}")
+                elif err:
                     print(f"  top_n={combo['top_n']} freq={combo['rebalance_freq']} "
                           f"rank={combo['ranking_mode']} -> ERROR: {err}")
                 else:
@@ -197,56 +269,85 @@ def main() -> int:
     df_valid["rank_in_period"] = df_valid.groupby("period")["annualized_return"].rank(ascending=False)
     df_valid["rank_calmar"] = df_valid.groupby("period")["calmar_ratio"].rank(ascending=False)
 
-    # For each combo, compute average rank across periods
-    combo_key = df_valid.groupby(["top_n", "rebalance_freq", "ranking_mode"])
-    avg_ranks = combo_key.agg(
-        avg_ann_rank=("rank_in_period", "mean"),
-        avg_calmar_rank=("rank_calmar", "mean"),
-        avg_ann=("annualized_return", "mean"),
-        avg_calmar=("calmar_ratio", "mean"),
-        avg_mdd=("max_drawdown", "mean"),
-        n_periods=("period", "nunique"),
-    ).reset_index()
+    if args.h_variant_mode:
+        combo_key = df_valid.groupby(["regime_fast_ma_period", "regime_drawdown_trigger"])
+        avg_ranks = combo_key.agg(
+            avg_ann_rank=("rank_in_period", "mean"),
+            avg_calmar_rank=("rank_calmar", "mean"),
+            avg_ann=("annualized_return", "mean"),
+            avg_calmar=("calmar_ratio", "mean"),
+            avg_mdd=("max_drawdown", "mean"),
+            n_periods=("period", "nunique"),
+        ).reset_index()
+        avg_ranks = avg_ranks.sort_values("avg_ann_rank")
 
-    avg_ranks = avg_ranks.sort_values("avg_ann_rank")
+        print(f"\n{'fast_ma':<12} {'dd_trig':<12} {'avg_ann_rank':<14} {'avg_calmar_rank':<16} {'avg_ann':<10} {'avg_calmar':<10} {'avg_mdd':<10} {'n_periods':<10}")
+        print("-" * 110)
+        for _, row in avg_ranks.iterrows():
+            print(f"{int(row['regime_fast_ma_period']):<12} {row['regime_drawdown_trigger']:<12.2f} "
+                  f"{row['avg_ann_rank']:<14.2f} {row['avg_calmar_rank']:<16.2f} "
+                  f"{row['avg_ann']:<10.4f} {row['avg_calmar']:<10.2f} {row['avg_mdd']:<10.4f} {int(row['n_periods']):<10}")
 
-    print(f"\n{'top_n':<8} {'freq':<8} {'rank_mode':<18} {'avg_ann_rank':<14} {'avg_calmar_rank':<16} {'avg_ann':<10} {'avg_calmar':<10} {'avg_mdd':<10} {'n_periods':<10}")
-    print("-" * 110)
-    for _, row in avg_ranks.iterrows():
-        print(f"{int(row['top_n']):<8} {int(row['rebalance_freq']):<8} {row['ranking_mode']:<18} "
-              f"{row['avg_ann_rank']:<14.2f} {row['avg_calmar_rank']:<16.2f} "
-              f"{row['avg_ann']:<10.4f} {row['avg_calmar']:<10.2f} {row['avg_mdd']:<10.4f} {int(row['n_periods']):<10}")
+        # Show best by period
+        print(f"\n--- Best config per period ---")
+        for period_name in df_valid["period"].unique():
+            pdf = df_valid[df_valid["period"] == period_name]
+            best = pdf.loc[pdf["annualized_return"].idxmax()]
+            print(f"  {period_name}: fast_ma={int(best['regime_fast_ma_period'])}, "
+                  f"dd_trig={best['regime_drawdown_trigger']:.2f}, "
+                  f"ann={best['annualized_return']:.4f}, mdd={best['max_drawdown']:.4f}")
+    else:
+        combo_key = df_valid.groupby(["top_n", "rebalance_freq", "ranking_mode"])
+        avg_ranks = combo_key.agg(
+            avg_ann_rank=("rank_in_period", "mean"),
+            avg_calmar_rank=("rank_calmar", "mean"),
+            avg_ann=("annualized_return", "mean"),
+            avg_calmar=("calmar_ratio", "mean"),
+            avg_mdd=("max_drawdown", "mean"),
+            n_periods=("period", "nunique"),
+        ).reset_index()
+        avg_ranks = avg_ranks.sort_values("avg_ann_rank")
 
-    # Check current params (top_n=2, freq=10)
-    current = avg_ranks[(avg_ranks["top_n"] == 2) & (avg_ranks["rebalance_freq"] == 10)]
-    print(f"\n--- Current params (top_n=2, rebalance_freq=10) ---")
-    for _, row in current.iterrows():
-        total_combos = len(avg_ranks)
-        top_third = total_combos / 3
-        in_top_third = row["avg_ann_rank"] <= top_third
-        print(f"  ranking_mode={row['ranking_mode']}: avg_ann_rank={row['avg_ann_rank']:.1f}/{total_combos} "
-              f"(in top 1/3: {'YES' if in_top_third else 'NO'})")
+        print(f"\n{'top_n':<8} {'freq':<8} {'rank_mode':<18} {'avg_ann_rank':<14} {'avg_calmar_rank':<16} {'avg_ann':<10} {'avg_calmar':<10} {'avg_mdd':<10} {'n_periods':<10}")
+        print("-" * 110)
+        for _, row in avg_ranks.iterrows():
+            print(f"{int(row['top_n']):<8} {int(row['rebalance_freq']):<8} {row['ranking_mode']:<18} "
+                  f"{row['avg_ann_rank']:<14.2f} {row['avg_calmar_rank']:<16.2f} "
+                  f"{row['avg_ann']:<10.4f} {row['avg_calmar']:<10.2f} {row['avg_mdd']:<10.4f} {int(row['n_periods']):<10}")
 
-    # Check top_n consistency
-    print(f"\n--- Parameter consistency across periods ---")
-    for param in ["top_n", "rebalance_freq"]:
-        best_per_period = df_valid.loc[df_valid.groupby("period")["annualized_return"].idxmax()]
-        mode_val = best_per_period[param].mode()
-        consistency = len(mode_val) > 0
-        if consistency:
-            print(f"  {param}: best value = {mode_val.iloc[0]} in "
-                  f"{(best_per_period[param] == mode_val.iloc[0]).sum()}/{len(SUB_PERIODS)} periods")
+        # Check current params (top_n=2, freq=10)
+        current = avg_ranks[(avg_ranks["top_n"] == 2) & (avg_ranks["rebalance_freq"] == 10)]
+        print(f"\n--- Current params (top_n=2, rebalance_freq=10) ---")
+        for _, row in current.iterrows():
+            total_combos = len(avg_ranks)
+            top_third = total_combos / 3
+            in_top_third = row["avg_ann_rank"] <= top_third
+            print(f"  ranking_mode={row['ranking_mode']}: avg_ann_rank={row['avg_ann_rank']:.1f}/{total_combos} "
+                  f"(in top 1/3: {'YES' if in_top_third else 'NO'})")
+
+        # Check top_n consistency
+        print(f"\n--- Parameter consistency across periods ---")
+        for param in ["top_n", "rebalance_freq"]:
+            best_per_period = df_valid.loc[df_valid.groupby("period")["annualized_return"].idxmax()]
+            mode_val = best_per_period[param].mode()
+            consistency = len(mode_val) > 0
+            if consistency:
+                n_periods = len(periods)
+                print(f"  {param}: best value = {mode_val.iloc[0]} in "
+                      f"{(best_per_period[param] == mode_val.iloc[0]).sum()}/{n_periods} periods")
 
     if args.export_results:
         out_dir = project_root() / "data/output/experiments/plan_05_19"
         out_dir.mkdir(parents=True, exist_ok=True)
-        exp_id = f"rotation_grid_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        prefix = "h_variant" if args.h_variant_mode else "rotation_grid"
+        exp_id = f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         output = {
             "experiment_id": exp_id,
             "plan_version": "05-19",
-            "section": "P0-B",
+            "section": "H-4-C" if args.h_variant_mode else "P0-B",
+            "h_variant_mode": args.h_variant_mode,
             "n_combos": len(combos),
-            "n_periods": len(SUB_PERIODS),
+            "n_periods": len(periods),
             "symbols": symbols,
             "trend_mode": str(mode.value),
             "grid_results": all_results,

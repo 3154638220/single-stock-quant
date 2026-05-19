@@ -1,0 +1,7 @@
+# X2 pool without 300750 - for single-alpha concentration risk testing (Phase J-3)
+# 600036 招商银行 - 银行
+# 000858 五粮液 - 白酒消费
+# 002594 比亚迪 - 汽车新能源
+600036
+000858
+002594

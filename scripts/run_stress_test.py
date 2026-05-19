@@ -88,6 +88,27 @@ def main() -> int:
                         help="Max positions in bear regime reduce mode (default: 1)")
     parser.add_argument("--index-symbol", default="000300",
                         help="Index symbol for market regime (default: 000300)")
+    parser.add_argument("--regime-fast-ma-period", type=int, default=0,
+                        help="Fast MA period for quick bear detection, 0=disable (default: 0)")
+    parser.add_argument("--regime-fast-threshold", type=float, default=0.97,
+                        help="Price threshold below fast MA to trigger bear (default: 0.97)")
+    parser.add_argument("--regime-drawdown-trigger", type=float, default=0.0,
+                        help="Index drawdown trigger threshold, 0=disable (default: 0.0)")
+    parser.add_argument("--regime-drawdown-lookback", type=int, default=60,
+                        help="Lookback days for drawdown rolling peak (default: 60)")
+    parser.add_argument("--portfolio-dd-limit", type=float, default=0.0,
+                        help="Portfolio equity DD limit, 0=disable (default: 0.0)")
+    parser.add_argument("--stop-loss-pct", type=float, default=0.08,
+                        help="Fixed stop loss pct (default: 0.08)")
+    parser.add_argument("--atr-trailing-mult", type=float, default=2.0,
+                        help="ATR trailing stop multiplier (default: 2.0)")
+    parser.add_argument("--atr-trailing-min-gain", type=float, default=0.05,
+                        help="Min gain to activate ATR trailing stop (default: 0.05)")
+    parser.add_argument("--volatility-target-ann", type=float, default=0.0,
+                        help="Target annualized volatility, 0=disable (default: 0.0)")
+    parser.add_argument("--volatility-scale-floor", type=float, default=0.30,
+                        help="Min position scale under vol targeting (default: 0.30)")
+    parser.add_argument("--symbol-params", help="YAML file with per-symbol DKTrendParams")
     args = parser.parse_args()
 
     symbols = _read_watchlist(args.watchlist)
@@ -99,6 +120,27 @@ def main() -> int:
         donchian_exit_window=10,
         min_run_len=1,
     )
+
+    # Load per-symbol DK params if provided (J-1)
+    symbol_params: dict[str, DKTrendParams] | None = None
+    if args.symbol_params:
+        sp_path = Path(args.symbol_params)
+        if sp_path.exists():
+            with open(sp_path) as f:
+                sp_data = yaml.safe_load(f)
+            symbol_params = {}
+            for sym, cfg in sp_data.get("symbol_params", {}).items():
+                sym_mode = TrendMode(str(cfg.get("mode", "donchian_breakout")))
+                symbol_params[str(sym).zfill(6)] = DKTrendParams(
+                    mode=sym_mode,
+                    donchian_entry_window=cfg.get("donchian_entry_window", 20),
+                    donchian_exit_window=cfg.get("donchian_exit_window", 10),
+                    min_run_len=cfg.get("min_run_len", 1),
+                    macd_fast=cfg.get("macd_fast", 12),
+                    macd_slow=cfg.get("macd_slow", 26),
+                    macd_signal=cfg.get("macd_signal", 9),
+                )
+            print(f"Loaded per-symbol params for {len(symbol_params)} symbols")
 
     print(f"Full-History Stress Test: {len(STRESS_PERIODS)} periods")
     print(f"Symbols: {symbols}")
@@ -155,9 +197,9 @@ def main() -> int:
                     ranking_mode=args.ranking_mode,
                     position_sizing=args.position_sizing,
                     volume_confirm=True,
-                    stop_loss_pct=0.08,
-                    atr_trailing_mult=2.0,
-                    atr_trailing_min_gain=0.05,
+                    stop_loss_pct=args.stop_loss_pct,
+                    atr_trailing_mult=args.atr_trailing_mult,
+                    atr_trailing_min_gain=args.atr_trailing_min_gain,
                     intrapos_dd_limit=0.15,
                     profit_lock_trigger=0.12,
                     profit_lock_trailing=0.05,
@@ -170,6 +212,14 @@ def main() -> int:
                     market_regime_mode=args.market_regime_mode,
                     regime_ma_period=args.regime_ma_period,
                     regime_reduce_top_n=args.regime_reduce_top_n,
+                    regime_fast_ma_period=args.regime_fast_ma_period,
+                    regime_fast_threshold=args.regime_fast_threshold,
+                    regime_drawdown_trigger=args.regime_drawdown_trigger,
+                    regime_drawdown_lookback=args.regime_drawdown_lookback,
+                    portfolio_dd_limit=args.portfolio_dd_limit,
+                    volatility_target_ann=args.volatility_target_ann,
+                    volatility_scale_floor=args.volatility_scale_floor,
+                    symbol_params=symbol_params,
                 )
 
                 ann = result.annualized_return

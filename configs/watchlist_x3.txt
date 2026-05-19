@@ -1,0 +1,15 @@
+# X3 pool - X2 expanded with low-correlation candidates (Appendix A)
+# 300750 宁德时代 - 新能源 (MACD cross mode)
+# 600036 招商银行 - 银行 (Donchian breakout)
+# 000858 五粮液 - 白酒消费 (Donchian breakout)
+# 002594 比亚迪 - 汽车新能源 (Donchian breakout)
+# 600519 贵州茅台 - 白酒 (Donchian breakout)
+# 600887 伊利股份 - 乳业消费防御 (Donchian breakout)
+# 600900 长江电力 - 电力稳定慢牛 (Donchian breakout)
+300750
+600036
+000858
+002594
+600519
+600887
+600900
