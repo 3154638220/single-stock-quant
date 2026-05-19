@@ -42,7 +42,7 @@ def main() -> int:
     parser.add_argument("--mode", choices=[m.value for m in TrendMode], default="donchian_breakout")
     parser.add_argument("--top-n", type=int, default=2, help="Number of stocks to hold simultaneously")
     parser.add_argument("--rebalance-freq", type=int, default=5, help="Rebalance every N trading days")
-    parser.add_argument("--ranking-mode", choices=["trend_strength", "rs_momentum"], default="trend_strength")
+    parser.add_argument("--ranking-mode", choices=["trend_strength", "rs_momentum", "multi_factor"], default="trend_strength")
     parser.add_argument("--donchian-entry", type=int, default=20)
     parser.add_argument("--donchian-exit", type=int, default=10)
     parser.add_argument("--min-run-len", type=int, default=1)
@@ -57,6 +57,7 @@ def main() -> int:
     parser.add_argument("--cost-bps", type=float, default=15.0)
     parser.add_argument("--initial-capital", type=float, default=100_000.0)
     parser.add_argument("--export-results", action="store_true")
+    parser.add_argument("--bootstrap", action="store_true", help="Run block bootstrap CI (P3-B)")
     parser.add_argument("--experiment-id", help="Experiment ID for output filename")
     parser.add_argument("--config", help="Config file path")
     parser.add_argument("--duckdb-path", help="Override DuckDB path")
@@ -142,6 +143,78 @@ def main() -> int:
         for reason in tl["exit_reason"].value_counts().index:
             print(f"  {reason}: {tl['exit_reason'].value_counts()[reason]}")
 
+    # ---- Bootstrap confidence intervals (P3-B) ----
+    if args.bootstrap:
+        print(f"\n{'='*60}")
+        print(f"Block Bootstrap (1000 iterations, block=21 days)")
+        print(f"{'='*60}")
+        daily = result.daily_returns.dropna()
+        if len(daily) < 252:
+            print("  Insufficient daily returns for bootstrap")
+        else:
+            rng = np.random.default_rng(42)
+            n = len(daily)
+            block_len = 21
+            n_blocks = int(np.ceil(n / block_len))
+            n_boot = 1000
+
+            boot_ann = np.empty(n_boot, dtype=np.float64)
+            boot_sharpe = np.empty(n_boot, dtype=np.float64)
+            boot_mdd = np.empty(n_boot, dtype=np.float64)
+
+            vals = daily.to_numpy(dtype=np.float64)
+            for b in range(n_boot):
+                # Block bootstrap: sample blocks with replacement
+                block_starts = rng.integers(0, max(1, n - block_len), size=n_blocks)
+                sample = []
+                for start in block_starts:
+                    sample.append(vals[start:start + block_len])
+                boot_rets = np.concatenate(sample)[:n]
+
+                ann = float(np.mean(boot_rets) * 252)
+                std = float(np.std(boot_rets))
+                sharpe = ann / (std * np.sqrt(252)) if std > 0 else 0.0
+
+                equity = (1 + boot_rets).cumprod()
+                running_max = np.maximum.accumulate(equity)
+                dd = (equity - running_max) / running_max
+                mdd = float(np.min(dd))
+
+                boot_ann[b] = ann
+                boot_sharpe[b] = sharpe
+                boot_mdd[b] = mdd
+
+            def _pctiles(arr, name):
+                p5 = np.percentile(arr, 5)
+                p25 = np.percentile(arr, 25)
+                p50 = np.percentile(arr, 50)
+                p75 = np.percentile(arr, 75)
+                p95 = np.percentile(arr, 95)
+                print(f"  {name}: median={p50:.4f} [P5: {p5:.4f}, P25: {p25:.4f}, P75: {p75:.4f}, P95: {p95:.4f}]")
+                return {"p5": p5, "p25": p25, "p50": p50, "p75": p75, "p95": p95}
+
+            ann_pct = _pctiles(boot_ann, "Annualized Return")
+            sharpe_pct = _pctiles(boot_sharpe, "Sharpe Ratio")
+            mdd_pct = _pctiles(boot_mdd, "Max Drawdown")
+
+            p_ann_14 = float(np.mean(boot_ann >= 0.14))
+            p5_sharpe_pos = float(np.percentile(boot_sharpe, 5) > 0)
+            p95_mdd_ok = float(np.percentile(boot_mdd, 95) < 0.40)
+            print(f"\n  P(ann >= 14%): {p_ann_14:.1%}  (target >= 70%)")
+            print(f"  P5 Sharpe > 0: {p5_sharpe_pos:.1%}  (target = 100%)")
+            print(f"  P95 MDD < 40%: {p95_mdd_ok:.1%}  (target = 100%)")
+
+            bootstrap_result = {
+                "n_iterations": n_boot,
+                "block_length": block_len,
+                "annualized_return": ann_pct,
+                "sharpe": sharpe_pct,
+                "max_drawdown": mdd_pct,
+                "p_ann_ge_14pct": p_ann_14,
+                "p5_sharpe_gt_0": p5_sharpe_pos,
+                "p95_mdd_lt_40pct": p95_mdd_ok,
+            }
+
     if args.export_results:
         out_dir = project_root() / "data/output/experiments/plan_05_19"
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -165,6 +238,8 @@ def main() -> int:
                 "n_rotations": result.n_rotations,
             },
         }
+        if args.bootstrap:
+            output["bootstrap"] = bootstrap_result
         path = out_dir / f"{exp_id}.json"
         with open(path, "w", encoding="utf-8") as f:
             json.dump(output, f, ensure_ascii=False, indent=2, allow_nan=False)

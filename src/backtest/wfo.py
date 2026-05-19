@@ -155,10 +155,10 @@ def _composite_score(
     min_trades_per_year: float = 2.0,
     max_trades_per_year: float = 30.0,
     max_drawdown_limit: float = 0.35,
-    w_calmar: float = 0.35,
+    w_calmar: float = 0.30,
     w_sharpe: float = 0.25,
-    w_dd_score: float = 0.15,
-    w_total_return: float = 0.15,
+    w_dd_score: float = 0.25,
+    w_total_return: float = 0.10,
     w_trade_freq: float = 0.10,
     reliability_mode: str = "standard",
 ) -> float:
@@ -181,7 +181,14 @@ def _composite_score(
     sharpe = np.clip(res.sharpe_ratio, -2.0, 3.0) if np.isfinite(res.sharpe_ratio) else -2.0
     calmar = np.clip(res.calmar_ratio, -1.0, 3.0) if np.isfinite(res.calmar_ratio) else -1.0
     total_ret = np.clip(res.total_return, -0.5, 1.0) if np.isfinite(res.total_return) else -0.5
-    dd_score = max(0.0, 1.0 - res.max_drawdown * 2.0) if np.isfinite(res.max_drawdown) else 0.0
+    # Nonlinear MDD penalty: gentle below 20%, steep above 20%
+    if np.isfinite(res.max_drawdown):
+        if res.max_drawdown > 0.20:
+            dd_score = max(0.0, (0.30 - res.max_drawdown) / 0.10)  # 20%→1.0, 30%→0.0
+        else:
+            dd_score = max(0.0, 1.0 - res.max_drawdown * 3.5)      # steeper gradient: 15%→0.475
+    else:
+        dd_score = 0.0
     mode = str(reliability_mode).lower()
     effective_w_trade_freq = 0.0 if mode == "quality_first" else float(w_trade_freq)
     trade_freq_score = min(float(n_per_year) / 10.0, 1.0)

@@ -94,6 +94,103 @@ def _trend_strength_score(trend: pd.DataFrame, idx: int) -> float:
     return dk_val * (1.0 + run_len / 10.0)
 
 
+def _rs_momentum_score(df: pd.DataFrame, idx: int) -> float:
+    """Relative strength momentum: excess return over 20 and 60 days.
+
+    Returns a score where higher = stronger relative momentum.
+    Negative scores indicate the stock is underperforming.
+    """
+    if idx < 20:
+        return -1.0
+    close = pd.to_numeric(df["close"], errors="coerce")
+    if idx >= 60:
+        rs_20 = close.iloc[idx] / close.iloc[idx - 20] - 1.0
+        rs_60 = close.iloc[idx] / close.iloc[idx - 60] - 1.0
+        return float(rs_20 * 0.6 + rs_60 * 0.4)
+    rs_20 = close.iloc[idx] / close.iloc[idx - 20] - 1.0
+    return float(rs_20)
+
+
+def _multi_factor_score(
+    trend: pd.DataFrame,
+    df: pd.DataFrame,
+    idx: int,
+    *,
+    w_trend: float = 0.55,
+    w_momentum: float = 0.25,
+    w_vol_adj: float = 0.10,
+    w_trend_dir: float = 0.10,
+) -> float:
+    """IC-verified multi-factor ranking score.
+
+    Weights informed by P1-B IC analysis (dk_value ICIR=0.123 dominant).
+    Momentum factors have negative ICIR in absolute terms but provide
+    relative ranking value in rotation context, hence reduced weight.
+    """
+    if idx < 0 or idx >= len(trend):
+        return -999.0
+
+    # Trend factor (dk_value, no run_len bonus — ICIR=-0.049 for run_len)
+    color = str(trend.loc[idx, "dk_color"])
+    if color != "red":
+        return -1.0
+    dk_val = float(trend.loc[idx, "dk_value"]) if "dk_value" in trend.columns else 0.5
+
+    # Momentum factor (rs_20 + rs_60)
+    close = pd.to_numeric(df["close"], errors="coerce")
+    if idx >= 60:
+        rs_20 = float(close.iloc[idx] / close.iloc[idx - 20] - 1.0)
+        rs_60 = float(close.iloc[idx] / close.iloc[idx - 60] - 1.0)
+        mom_score = rs_20 * 0.6 + rs_60 * 0.4
+    elif idx >= 20:
+        mom_score = float(close.iloc[idx] / close.iloc[idx - 20] - 1.0)
+    else:
+        mom_score = 0.0
+
+    # Volatility adjustment (inverse vol — lower vol preferred)
+    ret_1d = close.pct_change()
+    vol_20 = ret_1d.iloc[max(0, idx - 20):idx + 1].std() * np.sqrt(252)
+    vol_score = 1.0 / (vol_20 + 0.05) if np.isfinite(vol_20) and vol_20 > 0 else 0.5
+
+    # Trend direction (above MA120 = bullish confirmation)
+    ma120 = close.rolling(120, min_periods=60).mean()
+    above_ma120 = 1.0 if close.iloc[idx] > ma120.iloc[idx] else 0.5
+
+    return float(
+        w_trend * dk_val
+        + w_momentum * max(mom_score, -0.3)
+        + w_vol_adj * vol_score
+        + w_trend_dir * above_ma120
+    )
+
+
+def _ranking_score(trend: pd.DataFrame, df: pd.DataFrame, idx: int, mode: str) -> float:
+    """Dispatch to the appropriate ranking function based on mode."""
+    if mode == "rs_momentum":
+        return _rs_momentum_score(df, idx)
+    if mode == "multi_factor":
+        return _multi_factor_score(trend, df, idx)
+    return _trend_strength_score(trend, idx)
+
+
+def _apply_sector_constraint(
+    ranked: list[tuple[str, float]],
+    sector_map: dict[str, str],
+    top_n: int,
+) -> set[str]:
+    """Limit to one stock per sector, keeping highest-ranked within each sector."""
+    seen_sectors: set[str] = set()
+    final: set[str] = set()
+    for sym, score in ranked:
+        sector = sector_map.get(sym, sym)
+        if sector not in seen_sectors:
+            seen_sectors.add(sector)
+            final.add(sym)
+        if len(final) == top_n:
+            break
+    return final
+
+
 def _check_position_exit(
     df: pd.DataFrame,
     i: int,
@@ -162,6 +259,7 @@ def run_rotation_backtest(
     top_n: int = 2,
     rebalance_freq: int = 5,
     ranking_mode: str = "trend_strength",
+    position_sizing: str = "equal",
     volume_confirm: bool = True,
     volume_lookback: int = 20,
     volume_ratio_min: float = 1.0,
@@ -176,6 +274,7 @@ def run_rotation_backtest(
     cost_bps: float = 15.0,
     initial_capital: float = 100_000.0,
     min_bars_required: int = 100,
+    sector_map: dict[str, str] | None = None,
 ) -> RotationResult:
     """Run multi-stock rotation backtest.
 
@@ -347,7 +446,7 @@ def run_rotation_backtest(
                     continue
                 if sym in positions:
                     continue  # already held
-                score = _trend_strength_score(trends[sym], stock_idx)
+                score = _ranking_score(trends[sym], aligned[sym], stock_idx, ranking_mode)
                 if score > 0:  # only consider bullish stocks
                     scores.append((sym, score))
 
@@ -358,13 +457,17 @@ def run_rotation_backtest(
             for sym in list(positions.keys()):
                 stock_idx = _get_stock_data(sym, i)
                 if stock_idx is not None:
-                    held_scores.append((sym, _trend_strength_score(trends[sym], stock_idx)))
+                    held_scores.append((sym, _ranking_score(trends[sym], aligned[sym], stock_idx, ranking_mode)))
             held_scores.sort(key=lambda x: x[1], reverse=True)
 
             # Build target portfolio: top_n by score
             all_ranked = held_scores + scores
             all_ranked.sort(key=lambda x: x[1], reverse=True)
             target = {sym for sym, score in all_ranked[:top_n] if score > 0}
+
+            # Apply sector concentration constraint (max 1 per sector)
+            if sector_map:
+                target = _apply_sector_constraint(all_ranked, sector_map, top_n)
 
             # Exit stocks not in target
             for sym in list(positions.keys()):
@@ -409,9 +512,27 @@ def run_rotation_backtest(
                     continue
                 entry_px = float(s_df.loc[buy_idx, "open"])
 
-                # Equal weight allocation
+                # Position sizing
                 n_positions = len(positions) + 1  # after adding this one
-                allocation = (cash / (top_n - len(positions))) * 0.95  # leave buffer for costs
+                if position_sizing == "vol_inverse":
+                    # Compute weights for all target symbols by inverse volatility
+                    target_list = list(target)
+                    vols = {}
+                    for t_sym in target_list:
+                        t_df = aligned[t_sym]
+                        t_close = pd.to_numeric(t_df["close"], errors="coerce")
+                        t_ret = t_close.pct_change().iloc[max(0, len(t_close) - 20):]
+                        vols[t_sym] = float(t_ret.std() * np.sqrt(252)) + 1e-6
+                    raw_w = {t_sym: 1.0 / vols[t_sym] for t_sym in target_list}
+                    total_w = sum(raw_w.values())
+                    weights = {t_sym: min(max(raw_w[t_sym] / total_w, 0.30), 0.70) for t_sym in target_list}
+                    # Renormalise after clamping
+                    total_w2 = sum(weights.values())
+                    weights = {t_sym: w / total_w2 for t_sym, w in weights.items()}
+                    sym_weight = weights.get(sym, 1.0 / top_n)
+                    allocation = cash * sym_weight * 0.95
+                else:
+                    allocation = (cash / (top_n - len(positions))) * 0.95  # leave buffer for costs
                 if allocation <= 0:
                     continue
 
