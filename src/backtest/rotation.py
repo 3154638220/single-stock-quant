@@ -16,7 +16,7 @@ import pandas as pd
 from src.backtest.performance_panel import annualized_return_cagr, compute_performance_panel
 from src.indicators import DKTrendParams, TrendMode, compute_dktrend
 from src.indicators.donchian import compute_donchian_trend
-from src.market.tradability import is_open_limit_up_unbuyable, is_row_suspended_like
+from src.market.tradability import is_open_limit_up_unbuyable, is_row_suspended_like, is_tradable_open, next_buy_index
 from src.signals.generator import apply_volume_confirmation
 
 
@@ -34,26 +34,6 @@ class RotationResult:
     equity_curve: pd.Series
     trade_log: pd.DataFrame
     turnover_pct: float
-
-
-def _is_tradable_open(df: pd.DataFrame, idx: int) -> bool:
-    if idx < 0 or idx >= len(df):
-        return False
-    volume = float(df.loc[idx, "volume"]) if "volume" in df.columns else 1.0
-    open_px = float(df.loc[idx, "open"])
-    close_px = float(df.loc[idx, "close"])
-    return not is_row_suspended_like(volume, open_px, close_px)
-
-
-def _next_buy_index(df: pd.DataFrame, symbol: str, start_idx: int) -> int | None:
-    for j in range(start_idx, len(df)):
-        if not _is_tradable_open(df, j):
-            continue
-        prev_close = float(df.loc[j - 1, "close"]) if j > 0 else np.nan
-        open_px = float(df.loc[j, "open"])
-        if not is_open_limit_up_unbuyable(open_px, prev_close, symbol):
-            return j
-    return None
 
 
 def _compute_trend(
@@ -267,6 +247,7 @@ def run_rotation_backtest(
     volatility_target_ann: float = 0.0,
     volatility_scale_floor: float = 0.30,
     symbol_params: dict[str, DKTrendParams] | None = None,
+    sector_regime_thresholds: dict[str, float] | None = None,
 ) -> RotationResult:
     """Run multi-stock rotation backtest.
 
@@ -337,14 +318,16 @@ def run_rotation_backtest(
         atrs[sym] = atr_val / close
 
     # ---- market regime detection (pre-compute for all dates) ----
-    # H-1/H-2: Dual-speed MA + drawdown trigger detection
-    market_regime_bearish: pd.Series | None = None
-    if market_regime_mode != "off":
+    # Build proxy index close series (needed for regime + sector thresholds)
+    _idx_close: pd.Series | None = None
+    _idx_df: pd.DataFrame | None = None
+    _need_idx = market_regime_mode != "off" or bool(sector_regime_thresholds)
+    if _need_idx:
         if index_ohlcv is not None:
-            idx_df = index_ohlcv.copy()
-            idx_df["trade_date"] = pd.to_datetime(idx_df["trade_date"]).dt.normalize()
-            idx_df = idx_df.sort_values("trade_date").drop_duplicates("trade_date", keep="last")
-            idx_close = pd.to_numeric(idx_df["close"], errors="coerce")
+            _idx_df = index_ohlcv.copy()
+            _idx_df["trade_date"] = pd.to_datetime(_idx_df["trade_date"]).dt.normalize()
+            _idx_df = _idx_df.sort_values("trade_date").drop_duplicates("trade_date", keep="last")
+            _idx_close = pd.to_numeric(_idx_df["close"], errors="coerce")
         else:
             # Fallback: equal-weighted daily return of pool, then cumulative
             n_stocks = len(aligned)
@@ -359,9 +342,15 @@ def run_rotation_backtest(
                     daily_rets = daily_rets + sym_ret
             if daily_rets is not None and n_stocks > 0:
                 daily_rets = daily_rets / n_stocks
-                idx_close = (1 + daily_rets.fillna(0)).cumprod()
+                _idx_close = (1 + daily_rets.fillna(0)).cumprod()
             else:
-                idx_close = pd.Series(dtype=float)
+                _idx_close = pd.Series(dtype=float)
+
+    # H-1/H-2: Dual-speed MA + drawdown trigger detection
+    market_regime_bearish: pd.Series | None = None
+    if market_regime_mode != "off":
+        idx_close = _idx_close
+        idx_df = _idx_df
 
         # H-1: Slow MA (compatible with existing MA120 logic)
         slow_ma_period = regime_ma_period
@@ -404,6 +393,28 @@ def run_rotation_backtest(
                 else list(regime_bear_aligned) + [False] * (len(ref_df) - len(regime_bear_aligned)),
                 index=ref_df.index,
                 dtype=bool,
+            )
+
+    # ---- per-bar index drawdown for sector regime thresholds (L-2-A) ----
+    index_drawdown_series: pd.Series | None = None
+    if sector_regime_thresholds and _idx_close is not None and len(_idx_close) > 0:
+        rolling_peak_dd = _idx_close.expanding(min_periods=1).max()
+        _dd_series = _idx_close / rolling_peak_dd - 1.0
+        # Align to reference timeline
+        if index_ohlcv is not None and _idx_df is not None:
+            dd_map = dict(zip(_idx_df["trade_date"], _dd_series))
+            index_drawdown_series = pd.Series(
+                [dd_map.get(d, 0.0) for d in timeline_dates],
+                index=ref_df.index,
+                dtype=float,
+            )
+        else:
+            dd_aligned = _dd_series.reset_index(drop=True)
+            index_drawdown_series = pd.Series(
+                dd_aligned.values[:len(ref_df)] if len(dd_aligned) >= len(ref_df)
+                else list(dd_aligned) + [0.0] * (len(ref_df) - len(dd_aligned)),
+                index=ref_df.index,
+                dtype=float,
             )
 
     # ---- backtest state ----
@@ -481,7 +492,7 @@ def run_rotation_backtest(
                 pnl = exit_px / pos["entry_price"] - 1.0
                 # Simulate T+1 open execution for exit
                 if stock_idx + 1 < len(s_df):
-                    j = _next_buy_index(s_df, sym, stock_idx + 1)  # reuse buy index logic for next tradable
+                    j = next_buy_index(s_df, sym, stock_idx + 1)  # reuse buy index logic for next tradable
                     if j is not None:
                         exit_px = float(s_df.loc[j, "open"])
                 exit_val = pos["shares"] * exit_px
@@ -500,10 +511,21 @@ def run_rotation_backtest(
 
         # Market regime gate: reduce exposure in bear markets
         effective_top_n = top_n
+        sector_regime_keep: set[str] = set()  # symbols exempt from bear exit (L-2-A)
         if market_regime_mode != "off" and market_regime_bearish is not None:
             if i < len(market_regime_bearish) and market_regime_bearish.iloc[i]:
                 if market_regime_mode == "exit":
-                    effective_top_n = 0
+                    # L-2-A: per-sector differentiated exit thresholds
+                    if sector_regime_thresholds and sector_map and index_drawdown_series is not None and i < len(index_drawdown_series):
+                        current_dd = float(index_drawdown_series.iloc[i])
+                        for sym in list(positions.keys()):
+                            sec = sector_map.get(sym, sym)
+                            threshold = sector_regime_thresholds.get(sec, 0.05)
+                            if current_dd > -threshold:  # drawdown is negative, less severe than threshold
+                                sector_regime_keep.add(sym)
+                        effective_top_n = len(sector_regime_keep)
+                    else:
+                        effective_top_n = 0
                 elif market_regime_mode == "reduce":
                     effective_top_n = min(regime_reduce_top_n, top_n)
 
@@ -562,9 +584,12 @@ def run_rotation_backtest(
             all_ranked.sort(key=lambda x: x[1], reverse=True)
             target = {sym for sym, score in all_ranked[:effective_top_n] if score > 0}
 
+            # L-2-A: retain positions exempted by sector regime thresholds
+            target |= sector_regime_keep
+
             # Apply sector concentration constraint (max 1 per sector)
             if sector_map:
-                target = _apply_sector_constraint(all_ranked, sector_map, effective_top_n)
+                target = _apply_sector_constraint(all_ranked, sector_map, max(effective_top_n, len(target)))
 
             # Exit stocks not in target
             for sym in list(positions.keys()):
@@ -575,7 +600,7 @@ def run_rotation_backtest(
                         s_df = aligned[sym]
                         exit_px = float(s_df.loc[stock_idx, "close"])
                         if stock_idx + 1 < len(s_df):
-                            j = _next_buy_index(s_df, sym, stock_idx + 1)
+                            j = next_buy_index(s_df, sym, stock_idx + 1)
                             if j is not None:
                                 exit_px = float(s_df.loc[j, "open"])
                         pnl = exit_px / pos["entry_price"] - 1.0
@@ -604,7 +629,7 @@ def run_rotation_backtest(
                 s_df = aligned[sym]
 
                 # T+1 open execution
-                buy_idx = _next_buy_index(s_df, sym, stock_idx + 1)
+                buy_idx = next_buy_index(s_df, sym, stock_idx + 1)
                 if buy_idx is None:
                     continue
                 entry_px = float(s_df.loc[buy_idx, "open"])

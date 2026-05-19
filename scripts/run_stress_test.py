@@ -48,19 +48,24 @@ def _read_watchlist(path: str) -> list[str]:
     return symbols
 
 
-def _load_sector_map(path: str | None) -> dict[str, str] | None:
+def _load_sector_map(path: str | None) -> tuple[dict[str, str] | None, dict[str, float] | None]:
+    """Load sector map and optional regime thresholds from YAML."""
     if not path:
-        return None
+        return None, None
     p = Path(path)
     if not p.exists():
-        return None
+        return None, None
     with open(p) as f:
         data = yaml.safe_load(f)
     sector_map: dict[str, str] = {}
     for sector, symbols in data.get("sectors", {}).items():
         for sym in symbols:
             sector_map[str(sym).zfill(6)] = sector
-    return sector_map
+    regime_thresholds: dict[str, float] | None = None
+    raw_thresholds = data.get("regime_thresholds")
+    if raw_thresholds:
+        regime_thresholds = {str(k): float(v) for k, v in raw_thresholds.items()}
+    return sector_map, regime_thresholds
 
 
 def _format_pct(v: float) -> str:
@@ -112,7 +117,7 @@ def main() -> int:
     args = parser.parse_args()
 
     symbols = _read_watchlist(args.watchlist)
-    sector_map = _load_sector_map(args.sector_map)
+    sector_map, sector_regime_thresholds = _load_sector_map(args.sector_map)
 
     trend_params = DKTrendParams(
         mode=TrendMode.DONCHIAN_BREAKOUT,
@@ -208,6 +213,7 @@ def main() -> int:
                     cost_bps=15.0,
                     initial_capital=100_000.0,
                     sector_map=sector_map,
+                    sector_regime_thresholds=sector_regime_thresholds,
                     index_ohlcv=index_df,
                     market_regime_mode=args.market_regime_mode,
                     regime_ma_period=args.regime_ma_period,

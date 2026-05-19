@@ -68,6 +68,31 @@ def limit_down_px(prev_close: float, symbol: str) -> float:
     return pc * (1.0 - r)
 
 
+import pandas as pd
+
+
+def is_tradable_open(df: pd.DataFrame, idx: int) -> bool:
+    """Return True if the bar at idx is a normal trading day (not suspended)."""
+    if idx < 0 or idx >= len(df):
+        return False
+    volume = float(df.loc[idx, "volume"]) if "volume" in df.columns else 1.0
+    open_px = float(df.loc[idx, "open"])
+    close_px = float(df.loc[idx, "close"])
+    return not is_row_suspended_like(volume, open_px, close_px)
+
+
+def next_buy_index(df: pd.DataFrame, symbol: str, start_idx: int) -> int | None:
+    """Find the next tradable day from start_idx that is not limit-up at open."""
+    for j in range(start_idx, len(df)):
+        if not is_tradable_open(df, j):
+            continue
+        prev_close = float(df.loc[j - 1, "close"]) if j > 0 else float("nan")
+        open_px = float(df.loc[j, "open"])
+        if not is_open_limit_up_unbuyable(open_px, prev_close, symbol):
+            return j
+    return None
+
+
 def is_open_limit_down_unsellable(
     open_px: float,
     prev_close: float,

@@ -28,13 +28,13 @@ jobs:
           python -m pip install "ruff>=0.11.0"
 
       - name: Lint with ruff
-        run: python -m ruff check src/ scripts/ tests/
+        run: python -m ruff check src/ scripts/ tests/ --exclude 'scripts/archive/'
 
       - name: Type check with mypy
         run: |
           python -m mypy src/ --ignore-missing-imports --show-error-codes | tee mypy-output.txt
           ERROR_COUNT=$(grep -c "error:" mypy-output.txt 2>/dev/null || echo 0)
-          BASELINE=98
+          BASELINE=70
           echo "mypy errors: $ERROR_COUNT (baseline: $BASELINE)"
           if [ "$ERROR_COUNT" -gt "$BASELINE" ]; then
             echo "FAIL: new mypy errors introduced ($ERROR_COUNT > baseline $BASELINE)"
@@ -43,12 +43,12 @@ jobs:
           echo "mypy baseline check passed (errors <= $BASELINE)"
 
       - name: Test with pytest
-        run: python -m pytest --cov=src --cov-fail-under=56 --cov-report=term-missing
+        run: python -m pytest --cov=src --cov-fail-under=62 --cov-report=term-missing
 
       - name: Check script sizes (>200 lines warning)
         run: |
           echo "Scripts exceeding 200 lines (target: <200):"
-          find scripts/ -name "run_*.py" -exec wc -l {} + | awk '$1 > 200 {printf "  %s: %d lines\n", $2, $1}' || true
+          find scripts/ -name "run_*.py" -not -path "scripts/archive/*" -exec wc -l {} + | awk '$1 > 200 {printf "  %s: %d lines\n", $2, $1}' || true
           echo "See docs/plan-05-05 B4 for script slimming plan."
 
       - name: Smoke test imports

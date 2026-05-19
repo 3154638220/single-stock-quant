@@ -1,6 +1,11 @@
+import sys
+from pathlib import Path
+
 import pandas as pd
 
-from scripts.calibrate_eastmoney_dkbar import load_anchors, score_candidate
+# Module archived to scripts/archive/ in R8 N-4
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts" / "archive"))
+from calibrate_eastmoney_dkbar import load_anchors, score_candidate
 from src.indicators import DKTrendParams, TrendMode
 
 

@@ -18,6 +18,8 @@ from src.market.tradability import (
     is_open_limit_down_unsellable,
     is_open_limit_up_unbuyable,
     is_row_suspended_like,
+    is_tradable_open,
+    next_buy_index,
 )
 from src.models.meta_label import FEATURE_COLUMNS, build_signal_features
 from src.signals.consensus import compute_consensus_trend
@@ -106,27 +108,9 @@ def _ewma_volatility(returns: pd.Series, span: int = 20) -> pd.Series:
     return vol
 
 
-def _is_tradable_open(df: pd.DataFrame, idx: int) -> bool:
-    volume = float(df.loc[idx, "volume"]) if "volume" in df.columns else 1.0
-    open_px = float(df.loc[idx, "open"])
-    close_px = float(df.loc[idx, "close"])
-    return not is_row_suspended_like(volume, open_px, close_px)
-
-
-def _next_buy_index(df: pd.DataFrame, symbol: str, start_idx: int) -> int | None:
-    for j in range(start_idx, len(df)):
-        if not _is_tradable_open(df, j):
-            continue
-        prev_close = float(df.loc[j - 1, "close"]) if j > 0 else np.nan
-        open_px = float(df.loc[j, "open"])
-        if not is_open_limit_up_unbuyable(open_px, prev_close, symbol):
-            return j
-    return None
-
-
 def _next_sell_index(df: pd.DataFrame, start_idx: int, symbol: str = "") -> int | None:
     for j in range(start_idx, len(df)):
-        if not _is_tradable_open(df, j):
+        if not is_tradable_open(df, j):
             continue
         prev_close = float(df.loc[j - 1, "close"]) if j > 0 else np.nan
         open_px = float(df.loc[j, "open"])
@@ -583,7 +567,7 @@ def run_single_stock_backtest(
                 _meta_p_win = _predict_meta_p_win(meta_model, _meta_features, i)
                 if meta_mode == "hard" and (not np.isfinite(_meta_p_win) or _meta_p_win < meta_threshold):
                     continue
-            j = _next_buy_index(df, code, i + 1 + _pullback_offset)
+            j = next_buy_index(df, code, i + 1 + _pullback_offset)
             if j is None:
                 continue
             actions.setdefault(j, "buy")
@@ -926,7 +910,7 @@ def run_single_stock_backtest(
             color_now = str(trend.loc[i, "dk_color"]) if i < len(trend) else ""
             run_now = int(trend.loc[i, "dk_run_len"]) if i < len(trend) else 0
             if color_now == "red" and run_now >= reentry_min_run:
-                if not _is_tradable_open(df, i + 1):
+                if not is_tradable_open(df, i + 1):
                     pass
                 elif enable_index_filter and not _index_allows_new_position(
                     index_ohlcv,
@@ -938,7 +922,7 @@ def run_single_stock_backtest(
                 ):
                     pass
                 else:
-                    j = _next_buy_index(df, code, i + 1)
+                    j = next_buy_index(df, code, i + 1)
                     if j is not None:
                         actions[j] = "buy"
                         planned_long = True

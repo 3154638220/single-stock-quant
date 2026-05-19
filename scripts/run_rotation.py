@@ -85,6 +85,8 @@ def main() -> int:
     parser.add_argument("--volatility-scale-floor", type=float, default=0.30,
                         help="Min position scale under vol targeting (default: 0.30)")
     parser.add_argument("--symbol-params", help="YAML file with per-symbol DKTrendParams")
+    parser.add_argument("--sector-map", help="Sector map YAML for concentration constraint")
+    parser.add_argument("--output-state", help="Path to write current holding state JSON (for live signal tracking)")
     args = parser.parse_args()
 
     symbols = _read_watchlist(args.watchlist)
@@ -150,6 +152,24 @@ def main() -> int:
                 )
             print(f"  Loaded per-symbol params for {len(symbol_params)} symbols")
 
+    # Load sector map and regime thresholds
+    sector_map: dict[str, str] | None = None
+    sector_regime_thresholds: dict[str, float] | None = None
+    if args.sector_map:
+        sm_path = Path(args.sector_map)
+        if sm_path.exists():
+            with open(sm_path) as f:
+                sm_data = yaml.safe_load(f)
+            sector_map = {}
+            for sector, syms in sm_data.get("sectors", {}).items():
+                for sym in syms:
+                    sector_map[str(sym).zfill(6)] = sector
+            print(f"  Loaded sector map with {len(sector_map)} symbols")
+            raw_thresholds = sm_data.get("regime_thresholds")
+            if raw_thresholds:
+                sector_regime_thresholds = {str(k): float(v) for k, v in raw_thresholds.items()}
+                print(f"  Loaded regime thresholds for {len(sector_regime_thresholds)} sectors")
+
     result = run_rotation_backtest(
         ohlcv_map,
         trend_params=trend_params,
@@ -167,6 +187,8 @@ def main() -> int:
         time_stop_min_return=args.time_stop_min_return,
         cost_bps=args.cost_bps,
         initial_capital=args.initial_capital,
+        sector_map=sector_map,
+        sector_regime_thresholds=sector_regime_thresholds,
         index_ohlcv=index_df,
         market_regime_mode=args.market_regime_mode,
         regime_ma_period=args.regime_ma_period,
@@ -280,6 +302,20 @@ def main() -> int:
                 "p5_sharpe_gt_0": p5_sharpe_pos,
                 "p95_mdd_lt_40pct": p95_mdd_ok,
             }
+
+    if args.output_state:
+        out_path = Path(args.output_state)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        trade_log = result.trade_log
+        latest_date = str(trade_log["exit_date"].max()) if len(trade_log) > 0 else "unknown"
+        state = {
+            "date": latest_date,
+            "symbols": [str(s) for s in result.symbols],
+            "annualized_return": result.annualized_return,
+            "calmar_ratio": result.calmar_ratio,
+        }
+        out_path.write_text(json.dumps(state, ensure_ascii=False, indent=2))
+        print(f"\nState written to {out_path}")
 
     if args.export_results:
         out_dir = project_root() / "data/output/experiments/plan_05_19"
