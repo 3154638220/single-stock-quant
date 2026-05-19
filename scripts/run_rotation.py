@@ -61,6 +61,14 @@ def main() -> int:
     parser.add_argument("--experiment-id", help="Experiment ID for output filename")
     parser.add_argument("--config", help="Config file path")
     parser.add_argument("--duckdb-path", help="Override DuckDB path")
+    parser.add_argument("--market-regime-mode", choices=["off", "reduce", "exit"], default="off",
+                        help="Market regime gating: off/reduce/exit (default: off)")
+    parser.add_argument("--regime-ma-period", type=int, default=120,
+                        help="MA period for regime detection (default: 120)")
+    parser.add_argument("--regime-reduce-top-n", type=int, default=1,
+                        help="Max positions in bear regime reduce mode (default: 1)")
+    parser.add_argument("--index-symbol", default="000300",
+                        help="Index symbol for market regime (default: 000300)")
     args = parser.parse_args()
 
     symbols = _read_watchlist(args.watchlist)
@@ -70,9 +78,18 @@ def main() -> int:
     print(f"Rotation backtest: {len(symbols)} symbols, top {args.top_n}, "
           f"rebalance every {args.rebalance_freq} days, mode={args.mode}")
 
-    # Load data for all symbols
+    # Load data for all symbols (and optionally index)
     with DuckDBManager(config_path=args.config, duckdb_path=args.duckdb_path) as db:
         all_df = db.read_daily_frame(symbols=symbols, start=args.start, end=args.end)
+        index_df = None
+        if args.market_regime_mode != "off":
+            try:
+                idx_all = db.read_daily_frame(symbols=[args.index_symbol], start=args.start, end=args.end)
+                idx_sub = idx_all[idx_all["symbol"].astype(str).str.zfill(6) == args.index_symbol].copy()
+                if len(idx_sub) >= 30:
+                    index_df = idx_sub
+            except Exception:
+                pass  # fallback to pool composite in rotation.py
 
     ohlcv_map: dict[str, pd.DataFrame] = {}
     for sym in symbols:
@@ -113,6 +130,10 @@ def main() -> int:
         time_stop_min_return=args.time_stop_min_return,
         cost_bps=args.cost_bps,
         initial_capital=args.initial_capital,
+        index_ohlcv=index_df,
+        market_regime_mode=args.market_regime_mode,
+        regime_ma_period=args.regime_ma_period,
+        regime_reduce_top_n=args.regime_reduce_top_n,
     )
 
     print(f"\n{'='*60}")

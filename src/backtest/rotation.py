@@ -116,52 +116,32 @@ def _multi_factor_score(
     df: pd.DataFrame,
     idx: int,
     *,
-    w_trend: float = 0.55,
-    w_momentum: float = 0.25,
-    w_vol_adj: float = 0.10,
-    w_trend_dir: float = 0.10,
+    w_trend: float = 0.85,
+    w_vol_adj: float = 0.15,
 ) -> float:
     """IC-verified multi-factor ranking score.
 
-    Weights informed by P1-B IC analysis (dk_value ICIR=0.123 dominant).
-    Momentum factors have negative ICIR in absolute terms but provide
-    relative ranking value in rotation context, hence reduced weight.
+    Weights calibrated from P1-B IC analysis (2026-05-19):
+    - dk_value ICIR=+0.123 (dominant, only robust factor)
+    - vol_adj ICIR=+0.018 (weak positive tilt)
+    - rs_20/rs_60/above_ma120/run_len all negative ICIR → excluded
     """
     if idx < 0 or idx >= len(trend):
         return -999.0
 
-    # Trend factor (dk_value, no run_len bonus — ICIR=-0.049 for run_len)
+    # Trend factor: dk_value only — run_len bonus removed (ICIR=-0.049)
     color = str(trend.loc[idx, "dk_color"])
     if color != "red":
         return -1.0
     dk_val = float(trend.loc[idx, "dk_value"]) if "dk_value" in trend.columns else 0.5
 
-    # Momentum factor (rs_20 + rs_60)
+    # Volatility adjustment (inverse vol — lower vol preferred, weak ICIR=+0.018)
     close = pd.to_numeric(df["close"], errors="coerce")
-    if idx >= 60:
-        rs_20 = float(close.iloc[idx] / close.iloc[idx - 20] - 1.0)
-        rs_60 = float(close.iloc[idx] / close.iloc[idx - 60] - 1.0)
-        mom_score = rs_20 * 0.6 + rs_60 * 0.4
-    elif idx >= 20:
-        mom_score = float(close.iloc[idx] / close.iloc[idx - 20] - 1.0)
-    else:
-        mom_score = 0.0
-
-    # Volatility adjustment (inverse vol — lower vol preferred)
     ret_1d = close.pct_change()
     vol_20 = ret_1d.iloc[max(0, idx - 20):idx + 1].std() * np.sqrt(252)
     vol_score = 1.0 / (vol_20 + 0.05) if np.isfinite(vol_20) and vol_20 > 0 else 0.5
 
-    # Trend direction (above MA120 = bullish confirmation)
-    ma120 = close.rolling(120, min_periods=60).mean()
-    above_ma120 = 1.0 if close.iloc[idx] > ma120.iloc[idx] else 0.5
-
-    return float(
-        w_trend * dk_val
-        + w_momentum * max(mom_score, -0.3)
-        + w_vol_adj * vol_score
-        + w_trend_dir * above_ma120
-    )
+    return float(w_trend * dk_val + w_vol_adj * vol_score)
 
 
 def _ranking_score(trend: pd.DataFrame, df: pd.DataFrame, idx: int, mode: str) -> float:
@@ -275,6 +255,10 @@ def run_rotation_backtest(
     initial_capital: float = 100_000.0,
     min_bars_required: int = 100,
     sector_map: dict[str, str] | None = None,
+    index_ohlcv: pd.DataFrame | None = None,
+    market_regime_mode: str = "off",
+    regime_ma_period: int = 120,
+    regime_reduce_top_n: int = 1,
 ) -> RotationResult:
     """Run multi-stock rotation backtest.
 
@@ -342,6 +326,55 @@ def run_rotation_backtest(
         }).max(axis=1)
         atr_val = tr.ewm(span=14, min_periods=5).mean()
         atrs[sym] = atr_val / close
+
+    # ---- market regime detection (pre-compute for all dates) ----
+    market_regime_bearish: pd.Series | None = None
+    if market_regime_mode != "off":
+        if index_ohlcv is not None:
+            idx_df = index_ohlcv.copy()
+            idx_df["trade_date"] = pd.to_datetime(idx_df["trade_date"]).dt.normalize()
+            idx_df = idx_df.sort_values("trade_date").drop_duplicates("trade_date", keep="last")
+            idx_close = pd.to_numeric(idx_df["close"], errors="coerce")
+        else:
+            # Fallback: equal-weighted daily return of pool, then cumulative
+            n_stocks = len(aligned)
+            daily_rets = None
+            for sym in aligned:
+                sym_df = aligned[sym].copy()
+                sym_close = pd.to_numeric(sym_df["close"], errors="coerce")
+                sym_ret = sym_close.pct_change()
+                if daily_rets is None:
+                    daily_rets = sym_ret
+                else:
+                    daily_rets = daily_rets + sym_ret
+            if daily_rets is not None and n_stocks > 0:
+                daily_rets = daily_rets / n_stocks
+                idx_close = (1 + daily_rets.fillna(0)).cumprod()
+            else:
+                idx_close = pd.Series(dtype=float)
+
+        idx_ma = idx_close.rolling(regime_ma_period, min_periods=regime_ma_period // 2).mean()
+        ma_slope = idx_ma.diff(5)
+        regime_bear = (idx_close < idx_ma) & (ma_slope < 0)
+        # Align to reference timeline
+        if index_ohlcv is not None:
+            regime_map = dict(zip(idx_df["trade_date"], regime_bear))
+            market_regime_bearish = pd.Series(
+                [regime_map.get(d, False) for d in timeline_dates],
+                index=ref_df.index,
+                dtype=bool,
+            )
+        else:
+            # regime_bear resampled to ref_df timeline
+            regime_bear_aligned = regime_bear.reset_index(drop=True)
+            if len(regime_bear_aligned) > len(ref_df):
+                regime_bear_aligned = regime_bear_aligned.iloc[:len(ref_df)]
+            market_regime_bearish = pd.Series(
+                regime_bear_aligned.values[:len(ref_df)] if len(regime_bear_aligned) >= len(ref_df)
+                else list(regime_bear_aligned) + [False] * (len(ref_df) - len(regime_bear_aligned)),
+                index=ref_df.index,
+                dtype=bool,
+            )
 
     # ---- backtest state ----
     cash = initial_capital
@@ -433,11 +466,29 @@ def run_rotation_backtest(
                     "hold_days": (pd.Timestamp(s_df.loc[stock_idx, "trade_date"]) - pos["entry_date"]).days,
                 })
 
+        # Market regime gate: reduce exposure in bear markets
+        effective_top_n = top_n
+        if market_regime_mode != "off" and market_regime_bearish is not None:
+            if i < len(market_regime_bearish) and market_regime_bearish.iloc[i]:
+                if market_regime_mode == "exit":
+                    effective_top_n = 0
+                elif market_regime_mode == "reduce":
+                    effective_top_n = min(regime_reduce_top_n, top_n)
+
+        # Force rebalance if bear regime requires fewer positions than currently held
+        force_rebalance = (
+            market_regime_mode != "off"
+            and market_regime_bearish is not None
+            and i < len(market_regime_bearish)
+            and market_regime_bearish.iloc[i]
+            and len(positions) > effective_top_n
+        )
+
         # Rebalance on schedule (or when a position was exited and we have capacity)
         is_rebalance_day = (i % rebalance_freq == 0)
-        capacity_available = len(positions) < top_n
+        capacity_available = len(positions) < effective_top_n
 
-        if is_rebalance_day or (capacity_available and sells_to_process):
+        if is_rebalance_day or force_rebalance or (capacity_available and sells_to_process):
             # Compute ranking scores for all symbols at this date
             scores: list[tuple[str, float]] = []
             for sym in aligned:
@@ -463,11 +514,11 @@ def run_rotation_backtest(
             # Build target portfolio: top_n by score
             all_ranked = held_scores + scores
             all_ranked.sort(key=lambda x: x[1], reverse=True)
-            target = {sym for sym, score in all_ranked[:top_n] if score > 0}
+            target = {sym for sym, score in all_ranked[:effective_top_n] if score > 0}
 
             # Apply sector concentration constraint (max 1 per sector)
             if sector_map:
-                target = _apply_sector_constraint(all_ranked, sector_map, top_n)
+                target = _apply_sector_constraint(all_ranked, sector_map, effective_top_n)
 
             # Exit stocks not in target
             for sym in list(positions.keys()):
@@ -529,10 +580,11 @@ def run_rotation_backtest(
                     # Renormalise after clamping
                     total_w2 = sum(weights.values())
                     weights = {t_sym: w / total_w2 for t_sym, w in weights.items()}
-                    sym_weight = weights.get(sym, 1.0 / top_n)
+                    sym_weight = weights.get(sym, 1.0 / max(effective_top_n, 1))
                     allocation = cash * sym_weight * 0.95
                 else:
-                    allocation = (cash / (top_n - len(positions))) * 0.95  # leave buffer for costs
+                    n_target = max(effective_top_n - len(positions), 1)
+                    allocation = (cash / n_target) * 0.95  # leave buffer for costs
                 if allocation <= 0:
                     continue
 

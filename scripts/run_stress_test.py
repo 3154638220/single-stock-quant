@@ -80,6 +80,14 @@ def main() -> int:
     parser.add_argument("--rebalance-freq", type=int, default=10)
     parser.add_argument("--position-sizing", choices=["equal", "vol_inverse"], default="equal")
     parser.add_argument("--export-results", action="store_true")
+    parser.add_argument("--market-regime-mode", choices=["off", "reduce", "exit"], default="off",
+                        help="Market regime gating: off/reduce/exit (default: off)")
+    parser.add_argument("--regime-ma-period", type=int, default=120,
+                        help="MA period for regime detection (default: 120)")
+    parser.add_argument("--regime-reduce-top-n", type=int, default=1,
+                        help="Max positions in bear regime reduce mode (default: 1)")
+    parser.add_argument("--index-symbol", default="000300",
+                        help="Index symbol for market regime (default: 000300)")
     args = parser.parse_args()
 
     symbols = _read_watchlist(args.watchlist)
@@ -118,6 +126,17 @@ def main() -> int:
                 else:
                     print(f"  {sym}: only {len(df)} rows, skipping")
 
+            # Load index data for regime gate (None = use pool composite fallback)
+            index_df = None
+            if args.market_regime_mode != "off":
+                try:
+                    idx_all = db.read_daily_frame(symbols=[args.index_symbol], start=start, end=end)
+                    idx_sub = idx_all[idx_all["symbol"].astype(str).str.zfill(6) == args.index_symbol].copy()
+                    if len(idx_sub) >= 30:
+                        index_df = idx_sub
+                except Exception:
+                    pass  # fallback to pool composite in rotation.py
+
             valid_syms = list(ohlcv_map.keys())
             if len(valid_syms) < args.top_n:
                 print(f"  SKIP: need {args.top_n} symbols, have {len(valid_syms)}")
@@ -147,6 +166,10 @@ def main() -> int:
                     cost_bps=15.0,
                     initial_capital=100_000.0,
                     sector_map=sector_map,
+                    index_ohlcv=index_df,
+                    market_regime_mode=args.market_regime_mode,
+                    regime_ma_period=args.regime_ma_period,
+                    regime_reduce_top_n=args.regime_reduce_top_n,
                 )
 
                 ann = result.annualized_return

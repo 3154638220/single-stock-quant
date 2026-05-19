@@ -37,7 +37,7 @@ SUB_PERIODS = [
 ROTATION_GRID = {
     "top_n": [1, 2, 3],
     "rebalance_freq": [5, 10, 15],
-    "ranking_mode": ["trend_strength", "rs_momentum"],
+    "ranking_mode": ["trend_strength", "rs_momentum", "multi_factor"],
 }
 
 
