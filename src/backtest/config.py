@@ -88,4 +88,8 @@ def build_bt_kwargs(cfg: dict[str, Any], *, index_ohlcv: pd.DataFrame | None = N
         "pullback_wait_days": int(filt_cfg.get("pullback_wait_days", 5)),
         # S3.4 — index MA20 position scaling
         "enable_index_ma20_filter": bool(risk_cfg.get("enable_index_ma20_filter", False)),
+        # R10 — regime gate for new entry permission
+        "regime_gate_enabled": bool(risk_cfg.get("regime_gate_enabled", False)),
+        "regime_ma_fast": int(risk_cfg.get("regime_ma_fast", 20)),
+        "regime_ma_slow": int(risk_cfg.get("regime_ma_slow", 60)),
     }

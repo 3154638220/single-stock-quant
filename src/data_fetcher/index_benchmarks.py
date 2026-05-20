@@ -22,6 +22,7 @@ class IndexFetchSpec:
 DEFAULT_INDEX_SPECS: tuple[IndexFetchSpec, ...] = (
     IndexFetchSpec("csi1000", "000852", "sh000852"),
     IndexFetchSpec("csi2000", "932000", "csi932000"),
+    IndexFetchSpec("csi300", "000300", "sh000300"),
 )
 
 

@@ -67,5 +67,6 @@ module = [
     "src.indicators.dktrend",
     "src.signals.generator",
     "src.backtest.single_stock",
+    "src.backtest.regime_gate",
 ]
 disallow_untyped_defs = true

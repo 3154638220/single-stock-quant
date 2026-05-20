@@ -81,7 +81,8 @@ def _pct(x): return "nan" if not np.isfinite(x) else f"{x*100:.2f}%"
 
 
 def run_single_combo(
-    symbol, df, trend_overrides, bt_overrides, stock_name=""
+    symbol, df, trend_overrides, bt_overrides, stock_name="",
+    index_ohlcv=None, regime_gate_enabled=False,
 ) -> dict:
     """Run one parameter combination and return key metrics."""
     trend_cfg = {**BASE_TREND, **trend_overrides}
@@ -100,6 +101,8 @@ def run_single_combo(
         volume_lookback=bt_cfg["volume_lookback"],
         volume_ratio_min=bt_cfg["volume_ratio_min"],
         stock_name=stock_name,
+        index_ohlcv=index_ohlcv,
+        regime_gate_enabled=regime_gate_enabled,
     )
     return {
         "ann": res.annualized_return,
@@ -122,6 +125,8 @@ def main():
     parser.add_argument("--output", default=None)
     parser.add_argument("--config", default=None)
     parser.add_argument("--n-jobs", type=int, default=1)
+    parser.add_argument("--regime-gate", action="store_true", help="Enable regime gate (requires CSI300 data)")
+    parser.add_argument("--no-exit-grid", action="store_true", help="Skip Phase 2 exit grid")
     args = parser.parse_args()
 
     symbol = str(args.symbol).strip().zfill(6)
@@ -130,6 +135,11 @@ def main():
 
     with DuckDBManager(config_path=args.config) as db:
         all_df = db.read_daily_frame(symbols=[symbol], start=args.start, end=args.end)
+        index_ohlcv = None
+        if args.regime_gate:
+            index_ohlcv = db.read_daily_frame(symbols=["000300"])
+            if index_ohlcv.empty:
+                print("WARNING: No CSI300 index data found, regime gate will fail open")
     df = all_df[all_df["symbol"].astype(str) == symbol].copy()
     if df.empty:
         raise SystemExit(f"No data for {symbol}")
@@ -165,8 +175,10 @@ def main():
                 trend_overrides["donchian_entry_window"] = trend_overrides.pop("entry_window")
                 trend_overrides["donchian_exit_window"] = trend_overrides.pop("exit_window")
 
-            is_res = run_single_combo(symbol, is_df, trend_overrides, fixed_exit, stock_name)
-            oos_res = run_single_combo(symbol, oos_df, trend_overrides, fixed_exit, stock_name)
+            is_res = run_single_combo(symbol, is_df, trend_overrides, fixed_exit, stock_name,
+                                     index_ohlcv=index_ohlcv, regime_gate_enabled=args.regime_gate)
+            oos_res = run_single_combo(symbol, oos_df, trend_overrides, fixed_exit, stock_name,
+                                      index_ohlcv=index_ohlcv, regime_gate_enabled=args.regime_gate)
 
             row = {
                 "signal_type": sig_type,
@@ -183,7 +195,7 @@ def main():
     # Phase 2: On best signal type, test exit grid
     # Find best signal type by median IS Calmar
     results_df = pd.DataFrame(all_rows)
-    if not results_df.empty:
+    if not results_df.empty and not args.no_exit_grid:
         sig_ranking = results_df.groupby("signal_type")["is_calmar"].median().sort_values(ascending=False)
         best_sig = sig_ranking.index[0]
         print(f"\nBest signal type by median IS Calmar: {best_sig} ({sig_ranking[best_sig]:.2f})")
@@ -202,8 +214,10 @@ def main():
             best_trend = {"mode": best_mode, "macd_fast": 10, "macd_slow": 26, "macd_signal": 8}
 
         for i, exit_combo in enumerate(exit_combos):
-            is_res = run_single_combo(symbol, is_df, best_trend, exit_combo, stock_name)
-            oos_res = run_single_combo(symbol, oos_df, best_trend, exit_combo, stock_name)
+            is_res = run_single_combo(symbol, is_df, best_trend, exit_combo, stock_name,
+                                     index_ohlcv=index_ohlcv, regime_gate_enabled=args.regime_gate)
+            oos_res = run_single_combo(symbol, oos_df, best_trend, exit_combo, stock_name,
+                                      index_ohlcv=index_ohlcv, regime_gate_enabled=args.regime_gate)
 
             row = {
                 "signal_type": f"{best_sig}_exit_grid",
@@ -216,11 +230,11 @@ def main():
 
         results_df = pd.DataFrame(all_rows)
 
-    # Filter and display IS-qualifying configs
+    # Filter and display IS-qualifying configs (plan S2-A criteria)
     is_mask = (
         (results_df["is_ann"] >= 0.20) &
-        (results_df["is_mdd"] <= 0.20) &
-        (results_df["is_calmar"] >= 1.0) &
+        (results_df["is_mdd"] <= 0.25) &
+        (results_df["is_calmar"] >= 0.8) &
         (results_df["is_n_trades"] >= 15)
     )
     qualifying = results_df[is_mask].copy()

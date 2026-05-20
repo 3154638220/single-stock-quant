@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from src.backtest.performance_panel import annualized_return_cagr, compute_performance_panel
+from src.backtest.regime_gate import RegimeGate
 from src.backtest.risk_metrics import risk_off_multiplier_from_index
 from src.backtest.transaction_costs import TransactionCostParams, cost_params_dict_for_logging
 from src.features.weekly_trend import compute_weekly_trend_state
@@ -363,6 +364,10 @@ def run_single_stock_backtest(
     pullback_wait_days: int = 5,
     # S3.4 — index MA20 position scaling
     enable_index_ma20_filter: bool = False,
+    # R10 — regime gate for new entry permission
+    regime_gate_enabled: bool = False,
+    regime_ma_fast: int = 20,
+    regime_ma_slow: int = 60,
 ) -> SingleStockBacktestResult:
     """Backtest one stock with T+1 open execution and single-position long/flat state.
 
@@ -482,6 +487,13 @@ def run_single_stock_backtest(
             if _ma20_v is not None and _close_v is not None and np.isfinite(_ma20_v) and np.isfinite(_close_v) and _ma20_v > 0:
                 _s3_idx_ma20_aligned[_j] = float(_close_v < _ma20_v)  # 1.0 if below MA20, 0.0 if above
 
+    # R10 — regime gate initialization
+    _regime_gate = (
+        RegimeGate(ma_fast=int(regime_ma_fast), ma_slow=int(regime_ma_slow))
+        if bool(regime_gate_enabled)
+        else None
+    )
+
     meta_mode = str(meta_label_mode).lower()
     meta_threshold = float(meta_label_threshold)
     _meta_features = (
@@ -507,6 +519,11 @@ def run_single_stock_backtest(
                 lookback_days=extreme_lookback_days,
                 drop_threshold=extreme_drop_threshold,
                 risk_off_factor=risk_off_factor,
+            ):
+                continue
+            if _regime_gate is not None and not _regime_gate.is_entry_allowed(
+                pd.Timestamp(df.loc[i, "trade_date"]),
+                index_ohlcv,
             ):
                 continue
             _q = float(_attr_quality.iloc[i]) if i < len(_attr_quality) else 0.0
@@ -919,6 +936,11 @@ def run_single_stock_backtest(
                     lookback_days=extreme_lookback_days,
                     drop_threshold=extreme_drop_threshold,
                     risk_off_factor=risk_off_factor,
+                ):
+                    pass
+                elif _regime_gate is not None and not _regime_gate.is_entry_allowed(
+                    pd.Timestamp(df.loc[i, "trade_date"]),
+                    index_ohlcv,
                 ):
                     pass
                 else:

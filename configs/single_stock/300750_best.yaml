@@ -1,9 +1,25 @@
 # Phase S5: Final optimized config for 300750 (宁德时代)
-# Based on R9 S1-S4 experiments — best config: pl_loose
-# Full period (2018-06-11 ~ 2026-05-15):
-#   Ann 24.87%, MDD 47.04%, Calmar 0.53, Sharpe 0.81, 70 trades, WR 44.29%
-# T3 (2019-2020 bull): Ann 68.27%, Calmar 2.18
-# T4 (2021-2022 bear): Ann -4.91%, Calmar -0.13
+# R10 S2-S4 experimental results (2026-05-19):
+#
+# S2-A: MACD (14/26/10) is the best signal type
+#   IS (2018-2023): Ann 11.3%, MDD 45.9%, Calmar 0.24
+#   OOS (2024-2026): Ann 31.5%, MDD 25.4%, Calmar 1.24
+#
+# S3-A: ATR trailing (mult=2.5, min_gain=0.10) beats profit_lock
+#   Full: Ann 43.8%, MDD 45.3%, Calmar 0.97, 46 trades
+#   T3 (2019-2020): Ann 120.1%, Calmar 4.57
+#   T4 (2021-2022): Ann +7.1%, Calmar 0.18
+#
+# S3-B: Regime gate (MA20/40) reduces MDD 27.5% but cuts Ann to 20.1%
+#   Hybrid approach: gate only during bear periods achieves median Calmar 1.28
+#
+# S4 WFO: 3-fold OOS median Calmar 0.82 (no gate), 1.28 (hybrid gate)
+#   Bootstrap P(Calmar>=1.0): 61.3%
+#   Cost sensitivity (25bps): Calmar 0.93
+#
+# Decision: Deploy WITHOUT regime gate in observation mode (paper trading).
+# Regime gate is available (set regime_gate_enabled: true) for risk-averse operation.
+
 paths:
   duckdb_path: data/market.duckdb
   output_dir: data/output
@@ -12,9 +28,9 @@ paths:
 
 trend_signal:
   mode: macd_cross
-  macd_fast: 10
+  macd_fast: 14
   macd_slow: 26
-  macd_signal: 8
+  macd_signal: 10
   min_run_len: 1
 
 signal_filter:
@@ -28,11 +44,11 @@ backtest:
   execution: tplus1_open
   stop_loss_pct: 0.08
   trailing_stop_pct: 0.0
-  atr_trailing_mult: 0.0
-  atr_trailing_min_gain: 0.0
+  atr_trailing_mult: 2.5
+  atr_trailing_min_gain: 0.10
   intrapos_dd_limit: 0.0
-  profit_lock_trigger: 0.12
-  profit_lock_trailing: 0.06
+  profit_lock_trigger: 0.0
+  profit_lock_trailing: 0.0
   time_stop_days: 30
   time_stop_min_return: 0.03
   market_exit_mode: 'off'
@@ -44,3 +60,6 @@ backtest:
 
 risk:
   enable_index_filter: false
+  regime_gate_enabled: false
+  regime_ma_fast: 20
+  regime_ma_slow: 40

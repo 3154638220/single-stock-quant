@@ -1,0 +1,71 @@
+# R10 WFO config for 300750 (宁德时代)
+# Based on S2-A signal comparison + S3-A exit optimization results
+#
+# S2-A conclusion: MACD (14/26/10) is the best signal type
+# S3-A conclusion: ATR trailing (mult=2.5, min_gain=0.10) beats profit_lock
+# S3-B conclusion: Regime gate reduces returns more than MDD; keep OFF for WFO
+#
+# WFO design: 3 folds, narrow exit grid (~36 combos) to prevent overfitting
+
+paths:
+  duckdb_path: data/market.duckdb
+  output_dir: data/output
+  logs_dir: data/logs
+  stock_name_cache: data/stock_names.csv
+
+trend_signal:
+  mode: macd_cross
+  macd_fast: 14
+  macd_slow: 26
+  macd_signal: 10
+  min_run_len: 1
+
+signal_filter:
+  volume_confirm: true
+  volume_lookback: 20
+  volume_ratio_min: 1.0
+  min_quality_score: 0
+  quality_score_mode: "off"
+
+backtest:
+  cost_bps: 15.0
+  initial_capital: 100000
+  execution: tplus1_open
+  stop_loss_pct: 0.08
+  atr_trailing_mult: 2.5
+  atr_trailing_min_gain: 0.10
+  intrapos_dd_limit: 0.0
+  profit_lock_trigger: 0.0
+  profit_lock_trailing: 0.0
+  time_stop_days: 30
+  time_stop_min_return: 0.03
+  market_exit_mode: 'off'
+  transaction_cost:
+    commission_buy_bps: 2.5
+    commission_sell_bps: 2.5
+    slippage_bps_per_side: 2.0
+    stamp_duty_sell_bps: 5.0
+
+risk:
+  enable_index_filter: false
+  regime_gate_enabled: false
+  enable_index_ma20_filter: false
+
+wfo:
+  n_folds: 3
+  train_days: 756   # ~3 years IS
+  oos_days: 378      # ~1.5 years OOS
+  step_days: 378
+  min_trades_per_year: 1.5
+  max_trades_per_year: 30.0
+  max_drawdown_limit: 0.40
+  reliability_mode: standard
+  n_jobs: 1
+  grid_key: param_grid
+
+  # Narrow exit-only grid: 2x3x3x2 = 36 combos (well under ~300 limit)
+  param_grid:
+    stop_loss_pct: [0.07, 0.08]
+    atr_trailing_mult: [2.0, 2.5, 3.0]
+    atr_trailing_min_gain: [0.08, 0.10, 0.12]
+    time_stop_days: [0, 30]

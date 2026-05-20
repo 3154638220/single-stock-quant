@@ -108,6 +108,10 @@ risk:
   extreme_lookback_days: 10
   extreme_drop_threshold: 0.05
   risk_off_factor: 0.0
+  # R10 — regime gate for new entry permission (requires CSI300 index data)
+  regime_gate_enabled: false
+  regime_ma_fast: 20
+  regime_ma_slow: 60
 
 notify:
   wecom_webhook_url: ""

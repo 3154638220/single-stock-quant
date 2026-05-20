@@ -8,9 +8,12 @@ import random
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Iterable, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Callable, Iterable, List, Optional, Tuple, Union
 
 import pandas as pd
+
+if TYPE_CHECKING:
+    from src.data_fetcher.index_benchmarks import IndexFetchSpec
 
 try:  # 离线研究脚本只读 DuckDB 时，不应被在线抓取依赖阻断导入。
     import akshare as ak
@@ -337,6 +340,45 @@ def fetch_etf_daily(
         return df[(df["trade_date"] >= start_ts) & (df["trade_date"] <= end_ts)].reset_index(drop=True)
 
     return call_with_timeout(_fetch, timeout_sec=timeout_sec, label=f"fund_etf_hist_em:{code}")
+
+
+def fetch_index_daily(
+    spec: "IndexFetchSpec",
+    start_date: str,
+    end_date: str,
+    *,
+    timeout_sec: float = 10.0,
+    config: dict | None = None,
+) -> pd.DataFrame:
+    """Fetch index daily OHLCV via AkShare ``stock_zh_index_daily``.
+
+    Args:
+        spec: IndexFetchSpec with akshare_symbol (e.g. ``sh000300``) and output_symbol.
+        start_date: ``YYYYMMDD``.
+        end_date: ``YYYYMMDD``.
+        timeout_sec: HTTP timeout.
+        config: Full config dict for AkShare configuration.
+
+    Returns:
+        Standardized daily DataFrame ready for DuckDB insertion.
+    """
+    from src.data_fetcher.index_benchmarks import standardize_index_daily
+
+    cfg = config or _load_config(None)
+    install_akshare_requests_resilience(cfg)
+    ak_mod = _require_akshare()
+
+    def _fetch() -> pd.DataFrame:
+        raw = ak_mod.stock_zh_index_daily(symbol=spec.akshare_symbol)
+        if raw is None or raw.empty:
+            return pd.DataFrame(columns=["trade_date", "open", "symbol", "name", "source_symbol"])
+        df = standardize_index_daily(raw, spec)
+        start_ts = pd.Timestamp(start_date).normalize()
+        end_ts = pd.Timestamp(end_date).normalize()
+        df = df[(df["trade_date"] >= start_ts) & (df["trade_date"] <= end_ts)]
+        return df.reset_index(drop=True)
+
+    return call_with_timeout(_fetch, timeout_sec=timeout_sec, label=f"stock_zh_index_daily:{spec.akshare_symbol}")
 
 
 def _project_root() -> Path:
